@@ -1,0 +1,61 @@
+# Stack complete : db (Postgres) + backend (FastAPI) + frontend (nginx). Interpolation des variables par docker compose pour l'interpolation ${...}.
+
+x-backend-env: &backend-env
+  # Un seul environnement declare : development. La base est la source de
+  # verite unique DATABASE_URL, pointee ici vers le Postgres conteneurise.
+  ENVIRONMENT: "development"
+  DEBUG: "False"
+  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis dans .env}
+  ALLOWED_ORIGINS: '["http://localhost:5173"]'
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER requis dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis dans .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB requis dans .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: exp-cmp-backend
+    build: ./exp-cmp-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *backend-env
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # TODO(frontend): `exp-cmp-client/` est vide (aucun code frontend commite).
+  # Re-active ce service quand le client sera implemente, sinon `docker compose
+  # up --build` echoue car le contexte ./frontend n'existe pas.
+  # frontend:
+  #   build:
+  #     context: ./exp-cmp-client
+  #     args:
+  #       VITE_API_URL: /
+  #   restart: unless-stopped
+  #   depends_on:
+  #     backend:
+  #       condition: service_healthy
+  #   ports:
+  #     - "5173:80"
+
+volumes:
+  pgdata:
