@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     ASSISTANT_LLM_MODEL: str = "gpt-4o-mini"
     ASSISTANT_LLM_ENABLE_FORMULATION: bool = True
 
+    # Assistant v2 (moteur multi-tool-call) : persistance des plans d'execution en
+    # cours (clarification/confirmation en attente) entre deux requetes HTTP.
+    ASSISTANTV2_REDIS_URL: str = "redis://localhost:6379/0"
+    ASSISTANTV2_MAX_ITERATIONS: int = 4
+
     @model_validator(mode="after")
     def check_production_safety(self):
         if self.ENVIRONMENT == "production":

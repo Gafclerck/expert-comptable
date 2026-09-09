@@ -15,10 +15,11 @@ os.environ.setdefault("SUPER_USER_PASSWORD", "mot-de-passe-root")
 import pytest
 from fastapi.testclient import TestClient
 
-import app.modules.identity.models  # noqa: F401
-import app.modules.ledger.models  # noqa: F401
-import app.modules.audit.models  # noqa: F401
-import app.modules.insurance.models  # noqa: F401
+# import app.modules.identity.models  # noqa: F401
+# import app.modules.ledger.models  # noqa: F401
+# import app.modules.audit.models  # noqa: F401
+# import app.modules.insurance.models  # noqa: F401
+from app.core.config import settings
 from app.core.base import Base
 from app.core.db import engine, init_db, session as session_factory
 from app.core.deps import limiter

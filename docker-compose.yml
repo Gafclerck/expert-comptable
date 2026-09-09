@@ -8,6 +8,9 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
   SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis dans .env}
   ALLOWED_ORIGINS: '["http://localhost:5173"]'
+  # Assistant v2 (moteur multi-tool-call, encore non branche sur l'app) :
+  # persistance des plans d'execution en attente de clarification/confirmation.
+  ASSISTANTV2_REDIS_URL: redis://redis:6379/0
 
 services:
   db:
@@ -25,12 +28,25 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     image: exp-cmp-backend
     build: ./exp-cmp-api
     restart: unless-stopped
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment: *backend-env
     ports:
@@ -59,3 +75,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:

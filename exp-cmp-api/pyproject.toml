@@ -21,6 +21,7 @@ dependencies = [
     "email-validator",
     "slowapi",
     "alembic",
+    "redis",
 ]
 
 [dependency-groups]
@@ -33,6 +34,12 @@ dev = [
 # L'app est un module plat (app/main.py) lance par uvicorn, pas un package
 # installable : uv sync ne doit installer que les dependances.
 package = false
+
+[tool.pytest.ini_options]
+# Ouvre le sys.path sur la racine du projet (sinon `pytest`/`uv run pytest`
+# sans `-m` echoue sur `import app` car `uv run` n'ajoute pas le cwd au path ;
+# `python -m pytest` passe grace au sys.path[0] = cwd de `python -m`).
+pythonpath = ["."]
 
 # Requis par le CLI fastapi (utilise par FastAPI Cloud) pour localiser l'app
 # dans notre layout plat.
