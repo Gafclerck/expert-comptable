@@ -26,10 +26,6 @@ class CategoryType(str, Enum):
 class TransactionType(str, Enum):
     REVENUE = "revenue"
     EXPENSE = "expense"
-    TRANSFER = "transfer"
-    REPAYMENT = "repayment"
-    FUNDING = "funding"
-    RETURN = "return"
 
 
 class TransactionStatus(str, Enum):

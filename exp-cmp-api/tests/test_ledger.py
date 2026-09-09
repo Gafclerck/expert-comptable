@@ -200,3 +200,22 @@ def test_transaction_non_autorisee_hors_activite(client, root, db, assurance, po
         },
     )
     assert response.status_code == 403
+
+
+def test_caisse_par_defaut_a_la_creation_business(client, root):
+    # Creer une nouvelle activite via API
+    res = client.post(
+        "/api/identity/businesses",
+        headers=auth_headers(root),
+        json={"code": "boulangerie", "name": "Boulangerie Moderne"},
+    )
+    assert res.status_code == 201
+    business_id = res.json()["id"]
+
+    # Verifier qu'une Caisse Principale a ete automatiquement creee
+    accounts = client.get(f"/api/ledger/accounts?business_id={business_id}", headers=auth_headers(root)).json()
+    assert len(accounts) == 1
+    assert accounts[0]["name"] == "Caisse Principale"
+    assert accounts[0]["type"] == "cash"
+    assert accounts[0]["currency"] == "FCFA"
+    assert float(accounts[0]["opening_balance"]) == 0.0

@@ -22,6 +22,12 @@ class InsuranceContractStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class InsuranceDueStatus(str, Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    OVERDUE = "overdue"
+
+
 class InsuranceClient(UUIDPkMixin, Base):
     __tablename__ = "insurance_clients"
 
@@ -62,6 +68,24 @@ class InsurancePayment(UUIDPkMixin, Base):
     paid_at: Mapped[date] = mapped_column(Date, nullable=False)
     transaction_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("transactions.id"), nullable=False, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class InsuranceDue(UUIDPkMixin, Base):
+    """Echeance programmee pour un contrat. Statut derive (voir refresh_due_statuses),
+    jamais mis a jour a la main : cascade chronologique sur le total deja paye du contrat.
+    """
+
+    __tablename__ = "insurance_dues"
+
+    contract_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("insurance_contracts.id"), nullable=False, index=True
+    )
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount_due: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    status: Mapped[InsuranceDueStatus] = mapped_column(
+        sa_enum(InsuranceDueStatus, length=20), nullable=False, default=InsuranceDueStatus.PENDING
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

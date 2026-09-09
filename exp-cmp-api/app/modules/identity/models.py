@@ -27,9 +27,7 @@ class BusinessStatus(str, Enum):
 
 class BusinessAccountRole(str, Enum):
     OWNER = "owner"
-    DRIVER = "driver"
     CUSTOMER = "customer"
-    SUPPLIER = "supplier"
 
 
 class RoleCode(str, Enum):

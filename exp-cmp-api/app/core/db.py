@@ -34,6 +34,9 @@ def init_db(db: Session) -> None:
         UserStatus,
     )
 
+    from decimal import Decimal
+    from app.modules.ledger.models import Account, AccountType, Category, CategoryType
+
     roles_by_code: dict[str, Role] = {}
     for code in RoleCode:
         existing = db.query(Role).filter(Role.code == code.value).first()
@@ -51,6 +54,34 @@ def init_db(db: Session) -> None:
             ]
         )
         db.flush()
+
+    # Creer une caisse par defaut pour chaque activite existante.
+    # Le nom est unifie sur "Caisse Principale", coherent avec
+    # ledger.DEFAULT_ACCOUNT_NAME et la preselection de l'assistant.
+    businesses = db.query(Business).all()
+    for b in businesses:
+        has_account = db.query(Account).filter(Account.business_id == b.id).first()
+        if not has_account:
+            db.add(
+                Account(
+                    business_id=b.id,
+                    name="Caisse Principale",
+                    type=AccountType.CASH,
+                    currency="FCFA",
+                    opening_balance=Decimal("0"),
+                    active=True,
+                )
+            )
+
+    # Creer les categories comptables de base si absentes
+    default_categories = [
+        ("vente-primes", "Vente de primes", CategoryType.CREDIT),
+        ("depenses-generales", "Dépenses générales", CategoryType.DEBIT),
+    ]
+    for code, name, ctype in default_categories:
+        existing_cat = db.query(Category).filter(Category.code == code).first()
+        if not existing_cat:
+            db.add(Category(code=code, name=name, type=ctype))
 
     admin = db.query(User).filter(User.email == settings.SUPER_USER_EMAIL).first()
     if not admin:

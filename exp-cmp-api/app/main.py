@@ -5,16 +5,20 @@ from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.core.deps import limiter
-from app.modules.audit.service import attach_listeners
+from app.modules.assistant.router import api_router as assistant_router
+from app.modules.audit.service import attach_listeners as attach_audit_listeners
 from app.modules.identity.router import api_router as identity_router
 from app.modules.insurance.router import api_router as insurance_router
+from app.modules.ledger.service import attach_listeners as attach_ledger_listeners
 from app.modules.ledger.router import api_router as ledger_router
 from app.modules.audit.router import api_router as audit_router
+from app.modules.poultry.router import api_router as poultry_router
 
 app = FastAPI()
 app.state.limiter = limiter
 
-attach_listeners()
+attach_audit_listeners()
+attach_ledger_listeners()
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +41,8 @@ app.include_router(identity_router, prefix=settings.API_STR)
 app.include_router(ledger_router, prefix=settings.API_STR)
 app.include_router(audit_router, prefix=settings.API_STR)
 app.include_router(insurance_router, prefix=settings.API_STR)
+app.include_router(poultry_router, prefix=settings.API_STR)
+app.include_router(assistant_router, prefix=settings.API_STR)
 
 if __name__ == "__main__":
     import uvicorn

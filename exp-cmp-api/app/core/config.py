@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     SUPER_USER_EMAIL: str = "admin@example.com"
     SUPER_USER_PASSWORD: str = "admin-changeme"
 
+    ASSISTANT_LLM_API_URL: str | None = None
+    ASSISTANT_LLM_API_KEY: str | None = None
+    ASSISTANT_LLM_MODEL: str = "gpt-4o-mini"
+    ASSISTANT_LLM_ENABLE_FORMULATION: bool = True
+
     @model_validator(mode="after")
     def check_production_safety(self):
         if self.ENVIRONMENT == "production":

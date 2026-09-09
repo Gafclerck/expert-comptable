@@ -23,7 +23,12 @@ _EVENT_ACTIONS = {
     "ledger.transfer.posted": ("transfers", AuditAction.TRANSFER, None),
     "insurance.client.created": ("insurance_clients", AuditAction.CREATE, None),
     "insurance.contract.created": ("insurance_contracts", AuditAction.CREATE, None),
+    "insurance.contract.cancelled": ("insurance_contracts", AuditAction.UPDATE, None),
     "insurance.payment.created": ("insurance_payments", AuditAction.CREATE, None),
+    "insurance.due.created": ("insurance_dues", AuditAction.CREATE, None),
+    "poultry.purchase.created": ("poultry_purchases", AuditAction.CREATE, None),
+    "poultry.sale.created": ("poultry_sales", AuditAction.CREATE, None),
+    "assistant.command.executed": ("assistant_commands", AuditAction.CREATE, None),
 }
 
 

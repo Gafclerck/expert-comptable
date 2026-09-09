@@ -1,0 +1,1 @@
+- Pas de categorie de compte tous les comptes sont du meme categorie

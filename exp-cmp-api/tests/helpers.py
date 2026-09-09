@@ -57,5 +57,10 @@ def create_category(client, actor, code="vente-primes", name="Vente de primes", 
         headers=auth_headers(actor),
         json={"code": code, "name": name, "type": ctype},
     )
+    if response.status_code == 400 and "existe deja" in response.text:
+        res = client.get("/api/ledger/categories", headers=auth_headers(actor))
+        for c in res.json():
+            if c["code"] == code:
+                return c
     assert response.status_code == 201
     return response.json()

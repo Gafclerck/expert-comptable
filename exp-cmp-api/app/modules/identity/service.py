@@ -141,17 +141,23 @@ def get_person(db: Session, person_id: uuid.UUID) -> Person:
     return person
 
 
-def create_person(db: Session, actor: User, full_name: str, phone: str | None = None) -> Person:
+def create_person(
+    db: Session, actor: User, full_name: str, phone: str | None = None, *, commit: bool = True
+) -> Person:
     person = Person(full_name=full_name, phone=phone)
     db.add(person)
-    db.commit()
-    db.refresh(person)
-    publish(
-        "identity.person.created",
-        actor_id=str(actor.id),
-        entity_id=str(person.id),
-        new_values={"full_name": person.full_name, "phone": person.phone},
-    )
+    if commit:
+        db.commit()
+        db.refresh(person)
+        publish(
+            "identity.person.created",
+            actor_id=str(actor.id),
+            entity_id=str(person.id),
+            new_values={"full_name": person.full_name, "phone": person.phone},
+        )
+    else:
+        db.flush()
+        db.refresh(person)
     return person
 
 
@@ -338,7 +344,13 @@ def update_business(db: Session, actor: User, business_id: uuid.UUID, name: str 
 
 
 def create_business_account(
-    db: Session, actor: User, business_id: uuid.UUID, person_id: uuid.UUID, role: BusinessAccountRole
+    db: Session,
+    actor: User,
+    business_id: uuid.UUID,
+    person_id: uuid.UUID,
+    role: BusinessAccountRole,
+    *,
+    commit: bool = True,
 ) -> BusinessAccount:
     business = get_business(db, business_id)
     person = get_person(db, person_id)
@@ -351,18 +363,22 @@ def create_business_account(
         raise HTTPException(status_code=400, detail="Cette personne est deja rattachee a cette activite")
     account = BusinessAccount(business_id=business.id, person_id=person.id, role=role)
     db.add(account)
-    db.commit()
-    db.refresh(account)
-    publish(
-        "identity.business_account.created",
-        actor_id=str(actor.id),
-        entity_id=str(account.id),
-        new_values={
-            "business_id": str(account.business_id),
-            "person_id": str(account.person_id),
-            "role": account.role.value,
-        },
-    )
+    if commit:
+        db.commit()
+        db.refresh(account)
+        publish(
+            "identity.business_account.created",
+            actor_id=str(actor.id),
+            entity_id=str(account.id),
+            new_values={
+                "business_id": str(account.business_id),
+                "person_id": str(account.person_id),
+                "role": account.role.value,
+            },
+        )
+    else:
+        db.flush()
+        db.refresh(account)
     return account
 
 
@@ -400,9 +416,11 @@ def get_person_summary(db: Session, person_id: uuid.UUID) -> Person:
 
 
 def add_business_customer(
-    db: Session, actor: User, business_id: uuid.UUID, person_id: uuid.UUID
+    db: Session, actor: User, business_id: uuid.UUID, person_id: uuid.UUID, *, commit: bool = True
 ) -> BusinessAccount:
-    return create_business_account(db, actor, business_id, person_id, BusinessAccountRole.CUSTOMER)
+    return create_business_account(
+        db, actor, business_id, person_id, BusinessAccountRole.CUSTOMER, commit=commit
+    )
 
 
 def business_exists(db: Session, business_id: uuid.UUID) -> bool:

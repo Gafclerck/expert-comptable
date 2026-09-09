@@ -4,6 +4,10 @@ TEST_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_ap
 TEST_DB_URL = f"sqlite:///{TEST_DB_PATH}"
 
 os.environ["DATABASE_URL"] = TEST_DB_URL
+# Neutralise le LlmiInterpreter par defaut : les tests doivent passer par les
+# regles FR, sans appeler un vrai LLM. Un developeur qui teste le LLM reel peut
+# redefinir la cle explicitement dans son environnement avant de lancer pytest.
+os.environ.setdefault("ASSISTANT_LLM_API_KEY", "")
 os.environ.setdefault("SECRET_KEY", "cle-de-test-tres-longue-pour-hmac-sha256-0123456789")
 os.environ.setdefault("SUPER_USER_EMAIL", "root@example.com")
 os.environ.setdefault("SUPER_USER_PASSWORD", "mot-de-passe-root")

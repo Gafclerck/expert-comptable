@@ -20,6 +20,7 @@ dependencies = [
     "pwdlib[argon2]",
     "email-validator",
     "slowapi",
+    "alembic",
 ]
 
 [dependency-groups]

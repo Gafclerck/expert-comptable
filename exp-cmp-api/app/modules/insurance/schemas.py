@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from app.modules.insurance.models import InsuranceClientStatus, InsuranceContractStatus
+from app.modules.insurance.models import InsuranceClientStatus, InsuranceContractStatus, InsuranceDueStatus
 
 
 class InsuranceClientCreate(BaseModel):
@@ -41,6 +41,7 @@ class InsuranceContractOut(BaseModel):
     end_date: date | None
     status: InsuranceContractStatus
     remaining_amount: Decimal
+    advance_amount: Decimal
     created_at: datetime
 
 
@@ -57,4 +58,18 @@ class InsurancePaymentOut(BaseModel):
     amount: Decimal
     paid_at: date
     transaction_id: uuid.UUID
+    created_at: datetime
+
+
+class InsuranceDueCreate(BaseModel):
+    due_date: date
+    amount_due: Decimal = Field(..., gt=0)
+
+
+class InsuranceDueOut(BaseModel):
+    id: uuid.UUID
+    contract_id: uuid.UUID
+    due_date: date
+    amount_due: Decimal
+    status: InsuranceDueStatus
     created_at: datetime

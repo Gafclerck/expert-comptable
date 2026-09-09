@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from tests.conftest import auth_headers, link_person_to_business, make_user
@@ -85,7 +85,7 @@ def test_encaisser_prime_credite_le_solde_et_audit(client, root, db, assurance, 
     assert {"insurance_clients", "insurance_contracts", "insurance_payments", "transactions"} <= types
 
 
-def test_paiement_complet_et_depassement_refuse(client, root, db, assurance, co_owner):
+def test_paiement_en_trop_credite_une_avance(client, root, db, assurance, co_owner):
     link_person_to_business(db, co_owner.person, assurance)
     account = create_account(client, root, assurance, name="Caisse Assurance")
     category = create_category(client, root, code="primes-full", name="Primes", ctype="credit")
@@ -97,7 +97,53 @@ def test_paiement_complet_et_depassement_refuse(client, root, db, assurance, co_
     assert first.status_code == 201
 
     over = _encaisse(client, co_owner, contract["id"], "1.00", account["id"], category["id"])
-    assert over.status_code == 400
+    assert over.status_code == 201
+
+    contract_after = client.get(f"/api/insurance/contracts/{contract['id']}", headers=auth_headers(co_owner)).json()
+    assert Decimal(contract_after["remaining_amount"]) == Decimal("0.00")
+    assert Decimal(contract_after["advance_amount"]) == Decimal("1.00")
+
+    balance = client.get(f"/api/ledger/accounts/{account['id']}/balance", headers=auth_headers(co_owner)).json()
+    assert Decimal(balance["balance"]) == Decimal("50001.00")
+
+
+def test_echeances_statut_derive_par_cascade(client, root, db, assurance, co_owner):
+    link_person_to_business(db, co_owner.person, assurance)
+    account = create_account(client, root, assurance, name="Caisse Assurance Echeances")
+    category = create_category(client, root, code="primes-ech", name="Primes", ctype="credit")
+
+    client_id = _create_client(client, co_owner, name="Fatou").json()["id"]
+    contract = _create_contract(client, co_owner, client_id, matricule="MAT-500", premium="60000.00").json()
+
+    today = date.today()
+    past = (today - timedelta(days=30)).isoformat()
+    soon = (today + timedelta(days=30)).isoformat()
+    later = (today + timedelta(days=60)).isoformat()
+
+    def add_due(due_date, amount):
+        return client.post(
+            f"/api/insurance/contracts/{contract['id']}/dues",
+            headers=auth_headers(co_owner),
+            json={"due_date": due_date, "amount_due": amount},
+        )
+
+    assert add_due(past, "20000.00").status_code == 201
+    assert add_due(soon, "20000.00").status_code == 201
+    assert add_due(later, "20000.00").status_code == 201
+
+    dues = client.get(f"/api/insurance/contracts/{contract['id']}/dues", headers=auth_headers(co_owner)).json()
+    statuses = {d["due_date"]: d["status"] for d in dues}
+    assert statuses[past] == "overdue"
+    assert statuses[soon] == "pending"
+    assert statuses[later] == "pending"
+
+    assert _encaisse(client, co_owner, contract["id"], "25000.00", account["id"], category["id"]).status_code == 201
+
+    dues_after = client.get(f"/api/insurance/contracts/{contract['id']}/dues", headers=auth_headers(co_owner)).json()
+    statuses_after = {d["due_date"]: d["status"] for d in dues_after}
+    assert statuses_after[past] == "paid"
+    assert statuses_after[soon] == "pending"
+    assert statuses_after[later] == "pending"
 
 
 def test_acces_refuse_hors_assurance(client, db, assurance, co_owner, poulets):

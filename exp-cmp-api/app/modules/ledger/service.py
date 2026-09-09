@@ -23,8 +23,8 @@ from app.modules.ledger.models import (
     TransferStatus,
 )
 
-CREDIT_TYPES = {TransactionType.REVENUE, TransactionType.FUNDING}
-DEBIT_TYPES = {TransactionType.EXPENSE, TransactionType.REPAYMENT, TransactionType.RETURN}
+CREDIT_TYPES = {TransactionType.REVENUE}
+DEBIT_TYPES = {TransactionType.EXPENSE}
 
 
 def _ensure_business_access(db: Session, user, business_id: uuid.UUID) -> None:
@@ -51,6 +51,63 @@ def list_accounts(db: Session, user, business_id: uuid.UUID | None = None, skip:
     return query.order_by(Account.created_at).offset(skip).limit(limit).all()
 
 
+DEFAULT_ACCOUNT_NAME = "Caisse Principale"
+
+
+def create_default_business_account(
+    db: Session, business_id: uuid.UUID, actor_id: str | None = None
+) -> Account | None:
+    """Cree une caisse par defaut pour une activite si elle n'en possede pas encore."""
+    existing = db.query(Account).filter(Account.business_id == business_id).first()
+    if existing:
+        return existing
+    account = Account(
+        business_id=business_id,
+        name=DEFAULT_ACCOUNT_NAME,
+        type=AccountType.CASH,
+        currency="FCFA",
+        opening_balance=Decimal("0"),
+        active=True,
+    )
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    publish(
+        "ledger.account.created",
+        actor_id=actor_id,
+        entity_id=str(account.id),
+        new_values={"business_id": str(account.business_id), "name": account.name, "type": account.type.value},
+    )
+    return account
+
+
+def _handle_business_created(
+    entity_id: str | None = None,
+    actor_id: str | None = None,
+    **_ignored,
+) -> None:
+    if not entity_id:
+        return
+    from app.core.db import session as session_factory
+    db = session_factory()
+    try:
+        create_default_business_account(db, uuid.UUID(entity_id), actor_id=actor_id)
+    finally:
+        db.close()
+
+
+_listeners_attached = False
+
+
+def attach_listeners() -> None:
+    global _listeners_attached
+    if _listeners_attached:
+        return
+    from app.core.events import subscribe
+    subscribe("identity.business.created", _handle_business_created)
+    _listeners_attached = True
+
+
 def create_account(
     db: Session, actor, business_id: uuid.UUID, name: str, acct_type: AccountType,
     currency: str, opening_balance: Decimal,
@@ -67,9 +124,10 @@ def create_account(
     db.add(account)
     db.commit()
     db.refresh(account)
+    actor_id = str(actor.id) if hasattr(actor, "id") and actor.id else (str(actor) if actor else None)
     publish(
         "ledger.account.created",
-        actor_id=str(actor.id),
+        actor_id=actor_id,
         entity_id=str(account.id),
         new_values={"business_id": str(account.business_id), "name": account.name, "type": account.type.value},
     )
@@ -119,6 +177,7 @@ def record_revenue(
     description: str | None,
     occurred_at: datetime | None,
     category_id: uuid.UUID,
+    commit: bool = True,
 ) -> Transaction:
     """Facade metier : encaisse un revenu sur une seule ligne (ex. prime d'assurance)."""
     return create_transaction(
@@ -132,6 +191,35 @@ def record_revenue(
         occurred_at=occurred_at,
         lines=[{"category_id": category_id, "amount": amount, "direction": LineDirection.CREDIT}],
         allocations=[],
+        commit=commit,
+    )
+
+
+def record_expense(
+    db: Session,
+    actor,
+    *,
+    business_id: uuid.UUID,
+    account_id: uuid.UUID,
+    amount: Decimal,
+    description: str | None,
+    occurred_at: datetime | None,
+    category_id: uuid.UUID,
+    commit: bool = True,
+) -> Transaction:
+    """Facade metier : debite une depense sur une seule ligne (ex. achat de poulets)."""
+    return create_transaction(
+        db,
+        actor,
+        business_id=business_id,
+        account_id=account_id,
+        txn_type=TransactionType.EXPENSE,
+        amount=amount,
+        description=description,
+        occurred_at=occurred_at,
+        lines=[{"category_id": category_id, "amount": amount, "direction": LineDirection.DEBIT}],
+        allocations=[],
+        commit=commit,
     )
 
 
@@ -147,9 +235,8 @@ def create_transaction(
     occurred_at: datetime | None,
     lines: list[dict],
     allocations: list[dict],
+    commit: bool = True,
 ) -> Transaction:
-    if txn_type == TransactionType.TRANSFER:
-        raise HTTPException(status_code=400, detail="Un virement se cree via /ledger/transfers")
     if not business_exists(db, business_id):
         raise HTTPException(status_code=404, detail="Activite introuvable")
     _ensure_business_access(db, actor, business_id)
@@ -214,19 +301,23 @@ def create_transaction(
             )
             for alloc in allocations
         )
-    db.commit()
-    db.refresh(txn)
-    publish(
-        "ledger.transaction.posted",
-        actor_id=str(actor.id),
-        entity_id=str(txn.id),
-        new_values={
-            "business_id": str(txn.business_id),
-            "account_id": str(txn.account_id),
-            "type": txn.type.value,
-            "amount": str(txn.amount),
-        },
-    )
+    if commit:
+        db.commit()
+        db.refresh(txn)
+        publish(
+            "ledger.transaction.posted",
+            actor_id=str(actor.id),
+            entity_id=str(txn.id),
+            new_values={
+                "business_id": str(txn.business_id),
+                "account_id": str(txn.account_id),
+                "type": txn.type.value,
+                "amount": str(txn.amount),
+            },
+        )
+    else:
+        db.flush()
+        db.refresh(txn)
     return txn
 
 

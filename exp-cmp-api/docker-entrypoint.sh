@@ -7,6 +7,9 @@ if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
 
+echo "[entrypoint] Application des migrations Alembic..."
+alembic upgrade head
+
 echo "[entrypoint] Verification du super admin..."
 python -m app.initial_data
 
