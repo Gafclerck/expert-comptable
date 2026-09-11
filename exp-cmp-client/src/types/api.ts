@@ -278,20 +278,23 @@ export interface AuditLogOut {
   created_at: string;
 }
 
-// ─── Assistant ────────────────────────────────────────────────
+// ─── Assistant (v2) ───────────────────────────────────────────
 
-export interface IntentMeta {
+export interface ToolMeta {
   operation: string;
   label: string;
   example: string;
+  business: string | null;
+  is_critical: boolean;
 }
 
 export interface AssistantReply {
   text: string;
   session_id: string;
-  intent: string | null;
-  executed: boolean;
+  executed_tools: string[];
   clarification: boolean;
   missing_field: string | null;
   options: string[];
+  confirmation_required: boolean;
+  pending_action: string | null;
 }

@@ -1,28 +1,15 @@
 import { useRef, useState } from 'react';
-import { fetchAssistantIntents, sendAssistantChat } from '@/services';
-import { useApiQuery } from '@/hooks/useApiQuery';
+import { sendAssistantChat } from '@/services';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  intent?: string | null;
-  executed?: boolean;
+  executedTools?: string[];
   clarification?: boolean;
   options?: string[];
   error?: boolean;
 }
-
-const FALLBACK_INTENTS = [
-  { operation: 'create_client', label: 'Créer un client', example: 'Créer un client Moussa Camara' },
-  { operation: 'create_contract', label: 'Créer un contrat', example: 'Nouveau contrat pour Tagoun, matricule MAT-100, prime 100 000' },
-  { operation: 'record_payment', label: 'Encaisser une prime', example: 'Encaisser 40 000 de Tagoun pour le contrat MAT-E2E' },
-  { operation: 'get_balance', label: "Consulter le solde d'une caisse", example: 'Solde de la caisse' },
-  { operation: 'get_remaining', label: "Reste à payer d'un contrat", example: 'Reste à payer du contrat MAT-E2E' },
-  { operation: 'get_client_info', label: "Consulter les infos d'un client", example: 'Infos du client Tagoun' },
-  { operation: 'get_contract_info', label: "Consulter les infos d'un contrat", example: 'Infos du contrat MAT-E2E' },
-  { operation: 'help', label: 'Aide', example: 'aide' },
-];
 
 let idCounter = 0;
 const newId = () => String(++idCounter);
@@ -39,9 +26,6 @@ export default function Assistant() {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const sessionRef = useRef<string | null>(null);
-
-  const { data: intents } = useApiQuery(fetchAssistantIntents, []);
-  const suggestions = intents && intents.length > 0 ? intents : FALLBACK_INTENTS;
 
   const pushMessage = (msg: Omit<Message, 'id'>) => setMessages(prev => [...prev, { ...msg, id: newId() }]);
 
@@ -61,8 +45,7 @@ export default function Assistant() {
       pushMessage({
         role: 'assistant',
         content: reply.text,
-        intent: reply.intent,
-        executed: reply.executed,
+        executedTools: reply.executed_tools,
         clarification: reply.clarification,
         options: reply.options,
       });
@@ -107,23 +90,6 @@ export default function Assistant() {
   return (
     <div className="h-full flex flex-col p-6 max-w-3xl mx-auto w-full">
 
-      {/* Suggestions dynamiques */}
-      <div className="mb-4">
-        <div className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Questions suggérées</div>
-        <div className="flex flex-wrap gap-2">
-          {suggestions.map(s => (
-            <button
-              key={s.operation}
-              onClick={() => send(s.example)}
-              title={s.label}
-              className="text-xs bg-white border border-slate-200 text-slate-600 rounded-lg p-2 hover:border-navy-300 hover:text-navy-700 transition-all"
-            >
-              {s.example}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 mb-4 min-h-0">
         {messages.map(msg => (
@@ -131,19 +97,18 @@ export default function Assistant() {
             {msg.role === 'assistant' && (
               <div className="w-7 h-7 rounded-full bg-navy-800 flex items-center justify-center text-white text-xs shrink-0 mr-2 mt-1">✦</div>
             )}
-            <div className={`max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed ${
-              msg.role === 'user'
-                ? 'bg-navy-800 text-white rounded-tr-sm'
-                : msg.error
-                  ? 'bg-red-50 border border-red-200 text-red-800 rounded-tl-sm'
-                  : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm'
-            }`}>
+            <div className={`max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed ${msg.role === 'user'
+              ? 'bg-navy-800 text-white rounded-tr-sm'
+              : msg.error
+                ? 'bg-red-50 border border-red-200 text-red-800 rounded-tl-sm'
+                : 'bg-white border border-slate-200 text-slate-800 rounded-tl-sm'
+              }`}>
               <div className="leading-relaxed">{renderContent(msg.content)}</div>
 
-              {msg.executed && (
-                <div className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 mt-1">
+              {msg.executedTools && msg.executedTools.length > 0 && (
+                <div className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2">
                   ✓ Enregistrée
-                  {msg.intent && <span className="font-normal text-emerald-600"> · {msg.intent}</span>}
+                  <span className="font-normal text-emerald-600"> · {msg.executedTools.join(', ')}</span>
                 </div>
               )}
 

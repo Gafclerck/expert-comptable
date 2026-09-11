@@ -14,7 +14,7 @@ export type {
   TransactionLineIn, TransactionLineOut, TransactionAllocationIn, TransactionAllocationOut,
   TransferOut, TransferCreate,
   InsuranceClientOut, InsuranceContractOut, InsurancePaymentOut,
-  AuditLogOut, IntentMeta, AssistantReply,
+  AuditLogOut, ToolMeta, AssistantReply,
 } from './api';
 
 export type ActivityId = 'assurance' | 'poulets' | 'vtc';

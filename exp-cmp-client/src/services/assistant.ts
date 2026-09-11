@@ -1,12 +1,13 @@
 // ─────────────────────────────────────────────────────────────
-// Service Assistant — interpréteur IA hybride (intents + chat)
+// Service Assistant v2 — moteur d'orchestration multi-tool-call
+// (endpoints /assistantv2/* : liste des outils + chat)
 // ─────────────────────────────────────────────────────────────
 
 import { api } from '../lib/api';
-import type { AssistantReply, IntentMeta } from '../types/api';
+import type { AssistantReply, ToolMeta } from '../types/api';
 
-export async function fetchAssistantIntents(): Promise<IntentMeta[]> {
-  const data = await api.get<IntentMeta[]>('/assistant/intents');
+export async function fetchAssistantTools(): Promise<ToolMeta[]> {
+  const data = await api.get<ToolMeta[]>('/assistantv2/tools');
   return data ?? [];
 }
 
