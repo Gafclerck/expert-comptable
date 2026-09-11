@@ -1,15 +1,14 @@
-# Stack complete : db (Postgres) + backend (FastAPI) + frontend (nginx). Interpolation des variables par docker compose pour l'interpolation ${...}.
+# Stack complete : db (Postgres) + redis + backend (FastAPI) + frontend
+# (serveur de dev Vite avec hot-reload). Interpolation des variables par
+# docker compose pour l'interpolation ${...}.
 
 x-backend-env: &backend-env
-  # Un seul environnement declare : development. La base est la source de
-  # verite unique DATABASE_URL, pointee ici vers le Postgres conteneurise.
-  ENVIRONMENT: "development"
-  DEBUG: "False"
+  # Seuls les parametres proprement "docker" sont declares ici : le reste de la
+  # config (SECRET_KEY, SUPER_USER_*, ASSISTANT_LLM_*, CORS, DEBUG, ENVIRONMENT)
+  # vient de exp-cmp-api/.env, source unique de verite des parametres applicatifs,
+  # injectes dans le service backend via env_file (voir service "backend").
+  # Le root .env (racine) ne sert donc plus qu'a l'infra compose (POSTGRES_*).
   DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY requis dans .env}
-  ALLOWED_ORIGINS: '["http://localhost:5173"]'
-  # Assistant v2 (moteur multi-tool-call, encore non branche sur l'app) :
-  # persistance des plans d'execution en attente de clarification/confirmation.
   ASSISTANTV2_REDIS_URL: redis://redis:6379/0
 
 services:
@@ -48,6 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    env_file:
+      - ./exp-cmp-api/.env
     environment: *backend-env
     ports:
       - "8000:8000"
@@ -58,21 +59,27 @@ services:
       retries: 12
       start_period: 30s
 
-  # TODO(frontend): `exp-cmp-client/` est vide (aucun code frontend commite).
-  # Re-active ce service quand le client sera implemente, sinon `docker compose
-  # up --build` echoue car le contexte ./frontend n'existe pas.
-  # frontend:
-  #   build:
-  #     context: ./exp-cmp-client
-  #     args:
-  #       VITE_API_URL: /
-  #   restart: unless-stopped
-  #   depends_on:
-  #     backend:
-  #       condition: service_healthy
-  #   ports:
-  #     - "5173:80"
-
+  frontend:
+    build:
+      context: ./exp-cmp-client
+      dockerfile: Dockerfile
+    container_name: exp_comp_frontend
+    command: pnpm run dev
+    volumes:
+      # Montage des sources locales pour le Hot-Reload (live changes)
+      - ./exp-cmp-client:/app
+      # Volume dédié pour préserver les node_modules Linux installés dans le conteneur
+      - client_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: "http://localhost:8000/api"
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+        
 volumes:
   pgdata:
   redisdata:
+  client_node_modules:
