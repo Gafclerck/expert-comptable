@@ -77,15 +77,6 @@ def init_db(db: Session) -> None:
     default_categories = [
         ("vente-primes", "Vente de primes", CategoryType.CREDIT),
         ("depenses-generales", "Dépenses générales", CategoryType.DEBIT),
-        # VTC
-        ("vtc-versements-chauffeurs", "Versements chauffeurs", CategoryType.CREDIT),
-        ("vtc-carburant", "Carburant", CategoryType.DEBIT),
-        ("vtc-entretien", "Entretien", CategoryType.DEBIT),
-        ("vtc-reparations", "Réparations", CategoryType.DEBIT),
-        ("vtc-pneus", "Pneus", CategoryType.DEBIT),
-        ("vtc-assurance", "Assurance véhicule", CategoryType.DEBIT),
-        ("vtc-immatriculation", "Immatriculation", CategoryType.DEBIT),
-        ("vtc-divers", "Dépenses diverses VTC", CategoryType.DEBIT),
     ]
     for code, name, ctype in default_categories:
         existing_cat = db.query(Category).filter(Category.code == code).first()
