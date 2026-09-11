@@ -13,6 +13,7 @@ from app.modules.ledger.service import attach_listeners as attach_ledger_listene
 from app.modules.ledger.router import api_router as ledger_router
 from app.modules.audit.router import api_router as audit_router
 from app.modules.poultry.router import api_router as poultry_router
+from app.modules.vtc.router import api_router as vtc_router
 
 app = FastAPI()
 app.state.limiter = limiter
@@ -42,6 +43,7 @@ app.include_router(ledger_router, prefix=settings.API_STR)
 app.include_router(audit_router, prefix=settings.API_STR)
 app.include_router(insurance_router, prefix=settings.API_STR)
 app.include_router(poultry_router, prefix=settings.API_STR)
+app.include_router(vtc_router, prefix=settings.API_STR)
 app.include_router(assistant_router, prefix=settings.API_STR)
 
 if __name__ == "__main__":
