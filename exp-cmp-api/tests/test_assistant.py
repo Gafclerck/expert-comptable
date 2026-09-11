@@ -1,6 +1,13 @@
+import pytest
+
 from tests.helpers import auth_headers, create_account
 
 ASSURANCE = "assurance"
+
+# Le module assistant v1 a ete debranche de app.main (les routes /api/assistant/*
+# ne sont plus montees). Ces tests HTTP sont conserves pour reference mais mis de
+# cote : l'assistant actif est le v2, couvert par tests/test_assistantv2.py.
+pytestmark = pytest.mark.skip(reason="assistant v1 debranche, voir test_assistantv2.py")
 
 
 def _chat(client, actor, message, session_id=None):
