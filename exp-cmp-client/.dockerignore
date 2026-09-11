@@ -1,0 +1,19 @@
+.git
+.gitignore
+
+# node_modules local : jamais copie dans le conteneur (volume dedie +
+# installation pnpm dans l'image)
+node_modules
+
+dist
+
+# Secrets
+.env
+.env.*
+
+# Divers
+__pycache__
+*.log
+.mise.toml
+.DS_Store
+.pnpm-store
