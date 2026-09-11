@@ -12,5 +12,6 @@ import app.modules.ledger.models  # noqa: F401
 import app.modules.audit.models  # noqa: F401
 import app.modules.insurance.models  # noqa: F401
 import app.modules.poultry.models  # noqa: F401
+import app.modules.vtc.models  # noqa: F401
 
 __all__ = ["Base"]
