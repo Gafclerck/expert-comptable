@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -115,6 +116,8 @@ def _run_loop(db: Session, actor, plan: Plan) -> AssistantReplyV2:
             index = len(plan.steps) - 1
 
             if not _prepare_step(db, actor, plan, index):
+                if plan.status != PlanStatus.AWAITING_CLARIFICATION:
+                    return _finalize(plan)
                 session_store.save_plan(plan)
                 return _ask_clarification_reply(plan)
 
@@ -152,6 +155,8 @@ def _resume_after_clarification(db: Session, actor, plan: Plan, message: str) ->
     plan.status = PlanStatus.RUNNING
 
     if not _prepare_step(db, actor, plan, index):
+        if plan.status != PlanStatus.AWAITING_CLARIFICATION:
+            return _finalize(plan)
         session_store.save_plan(plan)
         return _ask_clarification_reply(plan)
 
@@ -199,15 +204,40 @@ def _prepare_step(db: Session, actor, plan: Plan, index: int) -> bool:
             except resolvers.ClarificationNeeded as exc:
                 _pause_for_clarification(plan, index, exc.field, exc.question, exc.choices)
                 return False
+            except HTTPException as exc:
+                # Erreur dure (ex. business introuvable) : pas quelque chose que
+                # l'utilisateur peut corriger en repondant a une question, donc
+                # on echoue l'etape plutot que de la faire passer pour une
+                # clarification.
+                step.status = StepStatus.FAILED
+                step.error = str(exc.detail)
+                return False
             if step.params.get(id_key):
                 continue
             _pause_for_clarification(plan, index, field, spec.questions.get(field, f"Precisez : {field}"), [])
             return False
         else:
-            if step.params.get(field) not in (None, ""):
+            if _is_present_and_valid(field, step.params.get(field)):
                 continue
+            step.params.pop(field, None)
             _pause_for_clarification(plan, index, field, spec.questions.get(field, f"Precisez : {field}"), [])
             return False
+    return True
+
+
+def _is_present_and_valid(field: str, value) -> bool:
+    """Au-dela de la simple presence : les valeurs numeriques fournies
+    directement par le LLM (pas encore passees par la validation de
+    `_fill_field`, qui ne s'applique qu'aux reponses de clarification) doivent
+    aussi etre semantiquement valides. Une quantite ou un montant a zero ou
+    negatif ne doit jamais atteindre un outil (ex. division par zero dans
+    add_purchase/add_sale)."""
+    if value in (None, ""):
+        return False
+    if field == "quantity":
+        return isinstance(value, int) and value > 0
+    if field in ("amount", "premium"):
+        return isinstance(value, Decimal) and value > 0
     return True
 
 
@@ -349,13 +379,43 @@ def _ask_clarification_reply(plan: Plan) -> AssistantReplyV2:
 
 
 def _ask_confirmation_reply(plan: Plan, spec) -> AssistantReplyV2:
-    text = f"Confirmez-vous cette action : {spec.label} ? Repondez \"oui\" pour valider ou \"non\" pour annuler."
+    step = plan.steps[plan.pending_step_index]
+    summary = _summarize_params(step)
+    detail = f" ({summary})" if summary else ""
+    note = f" {spec.confirmation_note}" if spec.confirmation_note else ""
+    text = f"Confirmez-vous cette action : {spec.label}{detail} ?{note} Repondez \"oui\" pour valider ou \"non\" pour annuler."
     return AssistantReplyV2(
         text=text,
         session_id=plan.session_id,
         confirmation_required=True,
         pending_action=spec.name,
     )
+
+
+_PARAM_LABELS = {
+    "client": "client",
+    "matricule": "matricule",
+    "premium": "prime",
+    "contract": "contrat",
+    "amount": "montant",
+    "quantity": "quantite",
+    "due_date": "date",
+    "account_name": "caisse",
+}
+
+
+def _summarize_params(step: PlanStep) -> str:
+    """Resume lisible des parametres resolus, pour que le message de
+    confirmation restitue vraiment ce qui va etre execute (montant, contrat,
+    caisse...) plutot que le seul nom de l'outil : sans ca, l'utilisateur ne
+    peut pas verifier ce qu'il confirme."""
+    parts = []
+    for key, value in step.params.items():
+        if key.endswith("_id") or key.startswith("_") or key in ("account", "category"):
+            continue
+        label = _PARAM_LABELS.get(key, key)
+        parts.append(f"{label}: {value}")
+    return ", ".join(parts)
 
 
 def _execute_step(db: Session, actor, plan: Plan, index: int, spec) -> bool:
@@ -405,8 +465,6 @@ def _finalize(plan: Plan) -> AssistantReplyV2:
         return AssistantReplyV2(text=text, session_id=plan.session_id, executed_tools=[])
 
     static_text = "\n".join(s.static_text for s in done_steps if s.static_text)
-    if failed_steps:
-        static_text += "\n" + "\n".join(f"Erreur ({s.tool}): {s.error}" for s in failed_steps)
 
     formulator = get_formulator()
     if formulator is not None:
@@ -417,6 +475,13 @@ def _finalize(plan: Plan) -> AssistantReplyV2:
             text = static_text
     else:
         text = static_text
+
+    if failed_steps:
+        # Le formulateur ne voit que les etapes reussies (voir son appel
+        # ci-dessus) : les echecs sont donc toujours rattaches ici, une seule
+        # fois, qu'il ait ete utilise ou non, pour ne jamais disparaitre
+        # silencieusement derriere une reponse qui ne parle que des succes.
+        text += "\n" + "\n".join(f"Erreur ({s.tool}): {s.error}" for s in failed_steps)
 
     return AssistantReplyV2(text=text, session_id=plan.session_id, executed_tools=[s.tool for s in done_steps])
 

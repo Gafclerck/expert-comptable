@@ -49,6 +49,10 @@ class ToolSpec:
     # True : une confirmation utilisateur explicite est exigee avant execution,
     # verifiee cote orchestrateur (jamais laisse a la seule appreciation du LLM).
     is_critical: bool = False
+    # Message additionnel affiche avec la demande de confirmation (ex. avertir
+    # qu'une annulation de contrat n'entraine aucun remboursement automatique).
+    # Reserve aux outils critiques ou l'action a une consequence non evidente.
+    confirmation_note: str | None = None
     # True : outil sans effet de bord (lecture seule). Reserve pour une
     # parallelisation future ; l'execution reste sequentielle pour l'instant
     # (voir orchestrator.py).

@@ -10,12 +10,15 @@ et neutralise le formulateur par defaut (voir `_enable_llm`) pour que les
 assertions portent sur le texte statique, deterministe.
 """
 import json
+import uuid
 from decimal import Decimal
 
 import pytest
 
 from app.core.config import settings
 from app.modules.assistantv2 import service as assistantv2_service
+from app.modules.insurance import service as insurance_service
+from app.modules.insurance.models import InsuranceContractStatus
 from app.modules.ledger import service as ledger_service
 from app.modules.ledger.models import CategoryType
 from app.modules.poultry import service as poultry_service
@@ -131,6 +134,7 @@ def test_paiement_simple_demande_confirmation_puis_execute(db, root, assurance, 
     reply = assistantv2_service.chat(db, root, "Encaisser 40 000 de Tagoun pour le contrat MAT-E2E", None)
     assert reply.confirmation_required is True
     assert reply.pending_action == "record_payment"
+    assert "40000" in reply.text.replace(" ", "")  # le detail du montant est bien restitue avant de demander confirmation
 
     reply2 = assistantv2_service.chat(db, root, "oui", reply.session_id)
     assert reply2.executed_tools == ["record_payment"]
@@ -240,3 +244,114 @@ def test_formulation_combine_plusieurs_etapes(db, root, assurance, poulets, llm,
 
     assert reply.text == "Reponse combinee formulee."
     assert [op for op, _ in captured["operations"]] == ["get_stock", "get_balance"]
+
+
+def test_quantite_invalide_redemande_au_lieu_de_planter(db, root, poulets, llm):
+    # Avant correctif : une quantite a zero fournie directement par le LLM
+    # (donc jamais passee par la validation de _fill_field) atteignait le
+    # calcul de prix unitaire dans add_purchase et provoquait une
+    # ZeroDivisionError non geree. Doit maintenant redemander la quantite.
+    llm["queue"].append(_tool_call_message([("add_purchase", {"quantity": 0, "amount": "120000"})]))
+
+    reply = assistantv2_service.chat(db, root, "J'ai achete 0 poulets a 120000", None)
+
+    assert reply.clarification is True
+    assert reply.missing_field == "quantity"
+
+    reply2 = assistantv2_service.chat(db, root, "24", reply.session_id)
+    assert reply2.confirmation_required is True
+
+    reply3 = assistantv2_service.chat(db, root, "oui", reply2.session_id)
+    assert reply3.executed_tools == ["add_purchase"]
+    assert "24" in reply3.text
+
+
+def test_list_clients(db, root, assurance, client, llm):
+    _create_client_and_contract(client, root)
+    llm["queue"].append(_tool_call_message([("list_clients", {})]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Quels sont mes clients ?", None)
+
+    assert reply.executed_tools == ["list_clients"]
+    assert "Tagoun" in reply.text
+
+
+def test_list_contracts_filtre_par_client(db, root, assurance, client, llm):
+    _create_client_and_contract(client, root)
+    llm["queue"].append(_tool_call_message([("list_contracts", {"client": "Tagoun"})]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Quels sont les contrats de Tagoun ?", None)
+
+    assert reply.executed_tools == ["list_contracts"]
+    assert "MAT-E2E" in reply.text
+
+
+def test_cancel_contract_demande_confirmation_avec_avertissement(db, root, assurance, client, llm):
+    _, contract = _create_client_and_contract(client, root)
+    llm["queue"].append(_tool_call_message([("cancel_contract", {"contract": "MAT-E2E"})]))
+
+    reply = assistantv2_service.chat(db, root, "Annule le contrat MAT-E2E", None)
+    assert reply.confirmation_required is True
+    assert "remboursement" in reply.text.lower()
+
+    reply2 = assistantv2_service.chat(db, root, "oui", reply.session_id)
+    assert reply2.executed_tools == ["cancel_contract"]
+
+    refreshed = insurance_service.get_contract(db, root, uuid.UUID(contract["id"]))
+    assert refreshed.status == InsuranceContractStatus.CANCELLED
+
+
+def test_list_transactions_transverse(db, root, assurance, client, llm):
+    _create_client_and_contract(client, root)
+    llm["queue"].append(_tool_call_message([("record_payment", {"contract": "MAT-E2E", "amount": "40000"})]))
+    reply = assistantv2_service.chat(db, root, "Encaisser 40000 pour MAT-E2E", None)
+    assistantv2_service.chat(db, root, "oui", reply.session_id)
+
+    llm["queue"].append(_tool_call_message([("list_transactions", {"business": "assurance"})]))
+    llm["queue"].append(_no_tool_message())
+    reply2 = assistantv2_service.chat(db, root, "Historique de la caisse assurance", None)
+
+    assert reply2.executed_tools == ["list_transactions"]
+    assert "40 000" in reply2.text
+
+
+def test_get_balance_inclut_encaisse_et_depense(db, root, assurance, client, llm):
+    _create_client_and_contract(client, root)
+    llm["queue"].append(_tool_call_message([("record_payment", {"contract": "MAT-E2E", "amount": "40000"})]))
+    reply = assistantv2_service.chat(db, root, "Encaisser 40000 pour MAT-E2E", None)
+    assistantv2_service.chat(db, root, "oui", reply.session_id)
+
+    llm["queue"].append(_tool_call_message([("get_balance", {"business": "assurance"})]))
+    llm["queue"].append(_no_tool_message())
+    reply2 = assistantv2_service.chat(db, root, "Solde de la caisse assurance", None)
+
+    assert "encaisse" in reply2.text.lower()
+    assert "40 000" in reply2.text
+
+
+def test_get_period_summary_ce_mois_par_defaut(db, root, assurance, client, llm):
+    _create_client_and_contract(client, root)
+    llm["queue"].append(_tool_call_message([("record_payment", {"contract": "MAT-E2E", "amount": "40000"})]))
+    reply = assistantv2_service.chat(db, root, "Encaisser 40000 pour MAT-E2E", None)
+    assistantv2_service.chat(db, root, "oui", reply.session_id)
+
+    llm["queue"].append(_tool_call_message([("get_period_summary", {"business": "assurance"})]))
+    llm["queue"].append(_no_tool_message())
+    reply2 = assistantv2_service.chat(db, root, "Combien j'ai encaisse ce mois pour l'assurance ?", None)
+
+    assert reply2.executed_tools == ["get_period_summary"]
+    assert "40 000" in reply2.text
+    assert "ce mois" in reply2.text.lower()
+
+
+def test_get_period_summary_periode_sans_transaction(db, root, poulets, llm):
+    llm["queue"].append(_tool_call_message([("get_period_summary", {"period": "hier", "business": "poulets"})]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Depenses d'hier pour les poulets ?", None)
+
+    assert reply.executed_tools == ["get_period_summary"]
+    assert "hier" in reply.text.lower()
+    assert "0 FCFA" in reply.text

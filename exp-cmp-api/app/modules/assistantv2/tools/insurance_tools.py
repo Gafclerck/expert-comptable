@@ -7,6 +7,8 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
+from fastapi import HTTPException
+
 from app.modules.assistantv2 import resolvers
 from app.modules.assistantv2.registry import ToolSpec, register
 from app.modules.identity.service import get_person_summary
@@ -189,6 +191,84 @@ def add_due(db, actor, params: dict):
     return facts, due.id, text
 
 
+def list_clients(db, actor, params: dict):
+    clients = insurance_service.list_clients(db, actor, limit=50)
+    if not clients:
+        return {"kind": "list_clients", "clients": []}, None, "Aucun client enregistre."
+    rows = []
+    lines = []
+    for c in clients:
+        person = get_person_summary(db, c.person_id)
+        rows.append({"client_number": c.client_number, "full_name": person.full_name, "status": c.status.value})
+        lines.append(f"- {c.client_number} : {person.full_name} ({c.status.value})")
+    facts = {"kind": "list_clients", "count": str(len(clients)), "clients": rows}
+    text = f"Clients ({len(clients)}) :\n" + "\n".join(lines)
+    return facts, None, text
+
+
+def list_contracts(db, actor, params: dict):
+    ref = params.get("client")
+    client_id = None
+    client_label = None
+    if ref:
+        try:
+            client = insurance_service.find_client(db, actor, ref)
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                raise resolvers.ClarificationNeeded("client", str(exc.detail))
+            return {"kind": "list_contracts", "client": ref, "contracts": []}, None, f"Aucun client trouve pour \"{ref}\"."
+        client_id = client.id
+        client_label = get_person_summary(db, client.person_id).full_name
+
+    contracts = insurance_service.list_contracts(db, actor, client_id=client_id, limit=50)
+    if not contracts:
+        text = f"Aucun contrat pour {client_label}." if client_label else "Aucun contrat enregistre."
+        return {"kind": "list_contracts", "contracts": []}, None, text
+
+    rows = []
+    lines = []
+    for c in contracts:
+        remaining = insurance_service.remaining_amount(db, c)
+        rows.append({
+            "matricule": c.matricule,
+            "premium": f"{resolvers.fmt_amount(c.premium)} FCFA",
+            "remaining_status": resolvers.remaining_status(remaining),
+            "status": c.status.value,
+        })
+        lines.append(
+            f"- {c.matricule} : prime {resolvers.fmt_amount(c.premium)} FCFA, "
+            f"{resolvers.remaining_status(remaining)}, statut {c.status.value}"
+        )
+    facts = {"kind": "list_contracts", "count": str(len(contracts)), "contracts": rows}
+    header = f"Contrats de {client_label} ({len(contracts)}) :" if client_label else f"Tous les contrats ({len(contracts)}) :"
+    text = header + "\n" + "\n".join(lines)
+    return facts, None, text
+
+
+def get_payment_history(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    payments = insurance_service.list_payments(db, actor, contract.id, limit=50)
+    if not payments:
+        return (
+            {"kind": "get_payment_history", "matricule": contract.matricule, "payments": []},
+            contract.id,
+            f"Aucun paiement enregistre pour {contract.matricule}.",
+        )
+    rows = [{"date": resolvers.fmt_date(p.paid_at), "amount": f"{resolvers.fmt_amount(p.amount)} FCFA"} for p in payments]
+    lines = [f"- {r['date']} : {r['amount']}" for r in rows]
+    facts = {"kind": "get_payment_history", "matricule": contract.matricule, "payments": rows}
+    text = f"Paiements de {contract.matricule} :\n" + "\n".join(lines)
+    return facts, contract.id, text
+
+
+def cancel_contract(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    cancelled = insurance_service.cancel_contract(db, actor, contract.id)
+    facts = {"kind": "cancel_contract", "matricule": cancelled.matricule, "status": cancelled.status.value}
+    text = f"Contrat {cancelled.matricule} annule. Aucun remboursement n'est effectue automatiquement."
+    return facts, cancelled.id, text
+
+
 def _register() -> None:
     register(ToolSpec(
         name="create_client",
@@ -322,6 +402,51 @@ def _register() -> None:
             "amount": "Quel montant prevoir pour cette echeance ?",
         },
         is_critical=False,
+        is_read_only=False,
+    ))
+
+    register(ToolSpec(
+        name="list_clients",
+        label="Lister les clients",
+        example="Quels sont mes clients ?",
+        handler=list_clients,
+        business=BUSINESS_CODE,
+        parameters={"properties": {}, "required": []},
+        order=[],
+    ))
+    register(ToolSpec(
+        name="list_contracts",
+        label="Lister les contrats",
+        example="Quels sont mes contrats ? ou : contrats de Tagoun",
+        handler=list_contracts,
+        business=BUSINESS_CODE,
+        parameters={
+            "properties": {"client": {"type": "string", "description": "Nom du client (optionnel, sinon tous les contrats)"}},
+            "required": [],
+        },
+        order=[],
+    ))
+    register(ToolSpec(
+        name="get_payment_history",
+        label="Historique des paiements d'un contrat",
+        example="Historique des paiements du contrat MAT-100",
+        handler=get_payment_history,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": "Pour quel contrat ? Indiquez la matricule (ex. MAT-001) ou le nom du client."},
+    ))
+    register(ToolSpec(
+        name="cancel_contract",
+        label="Annuler un contrat",
+        example="Annule le contrat MAT-100",
+        handler=cancel_contract,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": "Pour quel contrat ? Indiquez la matricule (ex. MAT-001) ou le nom du client."},
+        is_critical=True,
+        confirmation_note="Aucun remboursement n'est effectue automatiquement.",
         is_read_only=False,
     ))
 

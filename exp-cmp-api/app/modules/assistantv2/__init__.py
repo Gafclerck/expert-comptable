@@ -1,8 +1,8 @@
 # Module assistant v2 : moteur d'orchestration multi-tool-call.
 #
-# NE PAS BRANCHER assistantv2_router sur app.main tant que la phase de test
-# manuelle/automatisee n'est pas concluante. Le module `assistant` (v1) reste
-# actif en parallele et n'est pas modifie.
+# Branche sur app.main : voir /api/assistantv2/chat et /api/assistantv2/tools.
+# Le module `assistant` (v1) reste actif en parallele, inchange, sur
+# /api/assistant/*.
 #
 # L'enregistrement des outils (registry.register) se declenche a l'import de
 # app.modules.assistantv2.tools : voir ce sous-package pour la liste des

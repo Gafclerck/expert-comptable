@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -406,6 +406,47 @@ def compute_balance(db: Session, account: Account) -> dict:
         "inflows": inflows,
         "outflows": outflows,
         "balance": balance,
+    }
+
+
+def compute_period_totals(db: Session, user, business_id: uuid.UUID, start: date, end: date) -> dict:
+    """Encaissements/depenses sur une periode donnee (bornes incluses), pour une
+    activite entiere (toutes ses caisses confondues). Contrairement a
+    compute_balance, qui est cumulatif depuis l'ouverture du compte, ceci
+    repond a des questions comme "combien j'ai encaisse ce mois". Les
+    virements entre caisses ne sont pas comptes : ce n'est ni un encaissement
+    ni une depense au sens de l'activite, juste un mouvement de tresorerie
+    interne.
+    """
+    _ensure_business_access(db, user, business_id)
+    start_dt = datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
+    end_dt = datetime.combine(end, datetime.max.time(), tzinfo=timezone.utc)
+    rows = (
+        db.query(Transaction.type, func.coalesce(func.sum(Transaction.amount), Decimal("0")))
+        .filter(
+            Transaction.business_id == business_id,
+            Transaction.status == TransactionStatus.POSTED,
+            Transaction.occurred_at >= start_dt,
+            Transaction.occurred_at <= end_dt,
+        )
+        .group_by(Transaction.type)
+        .all()
+    )
+    inflows = Decimal("0")
+    outflows = Decimal("0")
+    for ttype, total in rows:
+        ttype = TransactionType(ttype)
+        if ttype in CREDIT_TYPES:
+            inflows += total
+        elif ttype in DEBIT_TYPES:
+            outflows += total
+    return {
+        "business_id": business_id,
+        "start": start,
+        "end": end,
+        "inflows": inflows,
+        "outflows": outflows,
+        "net": inflows - outflows,
     }
 
 

@@ -16,5 +16,5 @@ export interface AssistantChatPayload {
 }
 
 export async function sendAssistantChat(payload: AssistantChatPayload): Promise<AssistantReply> {
-  return api.post<AssistantReply>('/assistant/chat', payload);
+  return api.post<AssistantReply>('/assistantv2/chat', payload);
 }

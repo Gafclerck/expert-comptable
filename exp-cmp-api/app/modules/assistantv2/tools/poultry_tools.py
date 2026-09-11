@@ -66,6 +66,44 @@ def get_stock(db, actor, params: dict):
     return facts, None, text
 
 
+def list_purchases(db, actor, params: dict):
+    purchases = poultry_service.list_approvisionnements(db, actor, limit=50)
+    if not purchases:
+        return {"kind": "list_purchases", "purchases": []}, None, "Aucun achat enregistre."
+    rows = []
+    lines = []
+    for p in purchases:
+        amount = (p.unit_price * p.quantity).quantize(Decimal("0.01"))
+        rows.append({
+            "date": resolvers.fmt_date(p.created_at.date()),
+            "quantity": str(p.quantity),
+            "amount": f"{resolvers.fmt_amount(amount)} FCFA",
+        })
+        lines.append(f"- {rows[-1]['date']} : {p.quantity} poulets pour {rows[-1]['amount']}")
+    facts = {"kind": "list_purchases", "purchases": rows}
+    text = "Achats recents :\n" + "\n".join(lines)
+    return facts, None, text
+
+
+def list_sales(db, actor, params: dict):
+    sales = poultry_service.list_ventes(db, actor, limit=50)
+    if not sales:
+        return {"kind": "list_sales", "sales": []}, None, "Aucune vente enregistree."
+    rows = []
+    lines = []
+    for s in sales:
+        amount = (s.unit_price * s.quantity).quantize(Decimal("0.01"))
+        rows.append({
+            "date": resolvers.fmt_date(s.created_at.date()),
+            "quantity": str(s.quantity),
+            "amount": f"{resolvers.fmt_amount(amount)} FCFA",
+        })
+        lines.append(f"- {rows[-1]['date']} : {s.quantity} poulets pour {rows[-1]['amount']}")
+    facts = {"kind": "list_sales", "sales": rows}
+    text = "Ventes recentes :\n" + "\n".join(lines)
+    return facts, None, text
+
+
 def _register() -> None:
     register(ToolSpec(
         name="add_purchase",
@@ -125,6 +163,24 @@ def _register() -> None:
         label="Consulter le stock de poulets",
         example="Combien de poulets me reste-t-il ?",
         handler=get_stock,
+        business=BUSINESS_CODE,
+        parameters={"properties": {}, "required": []},
+        order=[],
+    ))
+    register(ToolSpec(
+        name="list_purchases",
+        label="Lister les achats de poulets",
+        example="Historique de mes achats de poulets",
+        handler=list_purchases,
+        business=BUSINESS_CODE,
+        parameters={"properties": {}, "required": []},
+        order=[],
+    ))
+    register(ToolSpec(
+        name="list_sales",
+        label="Lister les ventes de poulets",
+        example="Historique de mes ventes de poulets",
+        handler=list_sales,
         business=BUSINESS_CODE,
         parameters={"properties": {}, "required": []},
         order=[],

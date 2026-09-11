@@ -10,7 +10,7 @@ factoriser dans un module partage.
 """
 import re
 import unicodedata
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 _AMOUNT_RE = re.compile(
@@ -152,6 +152,42 @@ def extract_contract_ref(text: str) -> str | None:
     if number:
         return number
     return extract_client_name(text)
+
+
+def parse_period(text: str) -> tuple[date, date, str] | None:
+    """Reconnait une expression de periode en langage naturel et renvoie
+    (debut, fin, libelle), les deux dates incluses. None si rien de reconnu :
+    a l'appelant de choisir un defaut (get_period_summary utilise "ce mois").
+
+    Semaine calee sur lundi (convention ISO/francophone). Les bornes sont des
+    dates calendaires locales : le deploiement actuel est a Dakar (UTC+0,
+    sans heure d'ete), donc equivalent a UTC, ce qui est ce que utilise
+    compute_period_totals pour construire ses bornes de requete.
+    """
+    norm = normalize(text)
+    today = date.today()
+    if "aujourdhui" in norm or "aujourd'hui" in norm:
+        return today, today, "aujourd'hui"
+    if "hier" in norm:
+        yesterday = today - timedelta(days=1)
+        return yesterday, yesterday, "hier"
+    if "semaine derniere" in norm or "semaine passee" in norm:
+        start_this_week = today - timedelta(days=today.weekday())
+        start = start_this_week - timedelta(days=7)
+        end = start_this_week - timedelta(days=1)
+        return start, end, "la semaine derniere"
+    if "semaine" in norm:
+        start = today - timedelta(days=today.weekday())
+        return start, today, "cette semaine"
+    if "mois dernier" in norm or "mois passe" in norm:
+        first_this_month = today.replace(day=1)
+        last_month_end = first_this_month - timedelta(days=1)
+        return last_month_end.replace(day=1), last_month_end, "le mois dernier"
+    if "mois" in norm:
+        return today.replace(day=1), today, "ce mois"
+    if "annee" in norm:
+        return today.replace(month=1, day=1), today, "cette annee"
+    return None
 
 
 def clean_free_text(message: str) -> str | None:

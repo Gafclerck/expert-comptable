@@ -1,10 +1,6 @@
-"""Router assistant v2. VOLONTAIREMENT NON branche sur app.main : voir
-app/modules/assistantv2/__init__.py. A inclure dans app/main.py uniquement
-une fois la phase de test manuelle/automatisee concluante :
-
-    from app.modules.assistantv2.router import api_router as assistantv2_router
-    ...
-    app.include_router(assistantv2_router, prefix=settings.API_STR)
+"""Router assistant v2, branche sur app.main : voir /api/assistantv2/chat et
+/api/assistantv2/tools. Le module `assistant` (v1) reste actif en parallele
+sur /api/assistant/*.
 """
 from fastapi import APIRouter
 
