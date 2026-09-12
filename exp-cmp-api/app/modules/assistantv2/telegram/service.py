@@ -40,6 +40,12 @@ def _new_token() -> str:
     return secrets.token_urlsafe(9)  # ~12 caracteres, unicite garantie par la contrainte
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """Normalise en datetime UTC aware : SQLite relit les colonnes
+    `DateTime(timezone=True)` comme naives (Postgres, lui, aware)."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
 def create_link_token(db: Session, user: User) -> TelegramLinkToken:
     """Genere un token jetable pour l'utilisateur. Invalide les precedents
     tokens non utilises du meme utilisateur (mono-liaison de fait)."""
@@ -65,7 +71,7 @@ def consume_link_token(db: Session, token: str) -> TelegramLinkToken | None:
     """Marque le token comme utilise s'il est encore valide (existant, non
     utilise, non expire). Retourne le token consomme, None sinon."""
     record = db.query(TelegramLinkToken).filter(TelegramLinkToken.token == token).first()
-    if record is None or record.used_at is not None or record.expires_at <= datetime.now(timezone.utc):
+    if record is None or record.used_at is not None or _as_utc(record.expires_at) <= datetime.now(timezone.utc):
         return None
     record.used_at = datetime.now(timezone.utc)
     db.commit()
@@ -95,13 +101,17 @@ def create_binding(
             tg_user_id=tg_user_id,
         )
         db.add(binding)
-        db.flush()
+        db.commit()
+        db.refresh(binding)
     else:
         binding.user_id = user.id
         binding.active = True
         binding.tg_username = tg_username
         binding.tg_user_id = tg_user_id
         binding.last_seen_at = None
+        db.commit()
+    # Le commit precede le publish : l'audit ouvre sa propre session (SQLite
+    # est single-writer ; les autres modules suivent la meme regle).
     publish(
         "telegram.binding.created",
         actor_id=str(user.id),
