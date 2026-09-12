@@ -2,8 +2,7 @@
 dependance. Testable par monkeypatch de `httpx.get`/`httpx.post` (meme
 pattern que l'appel LLM du moteur : distinction par URL).
 
-Phase 0 : diagnostic `get_me`. Les methodes `get_updates` et `send_message`
-arrivent en Phase 1 (voir docs/TELEGRAM_INTEGRATION.md).
+Phase 1 : get_me (diagnostic), get_updates (polling), send_message (envoi).
 """
 from __future__ import annotations
 
@@ -54,3 +53,29 @@ class TelegramClient:
         response = httpx.get(f"{self.base_url}/getMe", timeout=_HTTP_TIMEOUT)
         response.raise_for_status()
         return _parse(response)
+
+    def get_updates(self, offset: int | None = None, timeout: int | None = None) -> list[dict]:
+        """Long polling getUpdates. `offset` = premier update_id a recevoir.
+        `timeout` (long polling Telegram) doit rester sous le timeout HTTP."""
+        poll = timeout or settings.TELEGRAM_POLL_TIMEOUT_SECONDS
+        params = {"timeout": poll, "limit": 100}
+        if offset is not None:
+            params["offset"] = offset
+        response = httpx.get(f"{self.base_url}/getUpdates", params=params, timeout=poll + 15)
+        response.raise_for_status()
+        result = _parse(response)
+        return result if isinstance(result, list) else []
+
+    def send_message(self, chat_id: int, text: str) -> int | None:
+        """Envoie un message texte (tronque par le worker en blocs <= 4096).
+        Retourne le message_id en cas de succes."""
+        response = httpx.post(
+            f"{self.base_url}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=_HTTP_TIMEOUT,
+        )
+        response.raise_for_status()
+        result = _parse(response)
+        if isinstance(result, dict) and result.get("message_id") is not None:
+            return int(result["message_id"])
+        return None

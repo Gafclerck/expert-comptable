@@ -1,17 +1,16 @@
-"""Point d'entree du processus de canal Telegram (worker).
-
-Phase 0 : valide la config et le token (`get_me`) puis quitte. La boucle de
-long polling (`get_updates`) arrive en Phase 1 (docs/TELEGRAM_INTEGRATION.md).
+"""Point d'entree du processus de canal Telegram (worker de long polling).
 
 Codes de sortie :
-  0  canal desactive (TELEGRAM_ENABLED=false) ou bot valide ;
+  0  canal desactive (TELEGRAM_ENABLED=false) ou arret propre du worker ;
   1  canal active mais TELEGRAM_BOT_TOKEN absent ;
-  2  token refuse par l'API Telegram (get_me en echec).
+  2  token refuse par l'API Telegram (get_me en echec) - pas de boucle qui
+     poll en 401.
 
 Lancer : python -m app.modules.assistantv2.telegram (depuis exp-cmp-api/).
 """
 from app.core.config import settings
 from app.modules.assistantv2.telegram.client import TelegramAPIError, TelegramClient
+from app.modules.assistantv2.telegram.worker import TelegramWorker
 
 
 def main() -> int:
@@ -27,9 +26,8 @@ def main() -> int:
     except TelegramAPIError as exc:
         print(f"[telegram] get_me refuse par l'API : {exc.description} (code 2).")
         return 2
-    username = me.get("username") or "?"
-    print(f"[telegram] {username} valide et pret pour la Phase 1.")
-    return 0
+    print(f"[telegram] @{me.get('username') or '?'} valide : lancement du polling.")
+    return TelegramWorker(client=client).run_forever()
 
 
 if __name__ == "__main__":
