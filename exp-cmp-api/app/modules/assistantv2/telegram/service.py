@@ -67,11 +67,21 @@ def create_link_token(db: Session, user: User) -> TelegramLinkToken:
     return record
 
 
+def find_link_token(db: Session, token: str) -> TelegramLinkToken | None:
+    """Retourne le token SANS le consommer s'il est encore valide (existant,
+    non utilise, non expire), None sinon. Permet de valider le compte lie
+    avant de bruler le token (bug 6)."""
+    record = db.query(TelegramLinkToken).filter(TelegramLinkToken.token == token).first()
+    if record is None or record.used_at is not None or _as_utc(record.expires_at) <= datetime.now(timezone.utc):
+        return None
+    return record
+
+
 def consume_link_token(db: Session, token: str) -> TelegramLinkToken | None:
     """Marque le token comme utilise s'il est encore valide (existant, non
     utilise, non expire). Retourne le token consomme, None sinon."""
-    record = db.query(TelegramLinkToken).filter(TelegramLinkToken.token == token).first()
-    if record is None or record.used_at is not None or _as_utc(record.expires_at) <= datetime.now(timezone.utc):
+    record = find_link_token(db, token)
+    if record is None:
         return None
     record.used_at = datetime.now(timezone.utc)
     db.commit()
@@ -132,9 +142,11 @@ def get_active_binding(db: Session, chat_id: int) -> TelegramBinding | None:
 
 
 def get_binding_for_user(db: Session, user_id: uuid.UUID) -> TelegramBinding | None:
+    """Lien ACTIF le plus recent du compte. Un lien debranche n'est plus
+    renvoye par "me" (le listing admin, lui, conserve l'historique)."""
     return (
         db.query(TelegramBinding)
-        .filter(TelegramBinding.user_id == user_id)
+        .filter(TelegramBinding.user_id == user_id, TelegramBinding.active.is_(True))
         .order_by(TelegramBinding.linked_at.desc())
         .first()
     )

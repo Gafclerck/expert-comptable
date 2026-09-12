@@ -28,7 +28,9 @@ from app.modules.assistantv2 import service as assistantv2_service
 from app.modules.assistantv2 import session_store
 from app.modules.assistantv2.telegram import service as telegram_service
 from app.modules.assistantv2.telegram.client import TelegramAPIError, TelegramClient
+from app.modules.assistantv2.telegram.models import TelegramMessage
 from app.modules.identity.models import User, UserStatus
+from sqlalchemy import func
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -85,8 +87,21 @@ class TelegramWorker:
         while not self._stopped:
             try:
                 processed = self.run_once()
+            except httpx.HTTPStatusError as exc:
+                # Bug 2 : token rejete en cours de route (revocation...).
+                # Pas de boucle qui poll en 401 : on sort (code 2) et la
+                # supervision du processus decide de la reprise.
+                if exc.response.status_code == 401:
+                    logger.error("Token Telegram rejete par l'API (401) : arret du worker.")
+                    return 2
+                logger.warning("Erreur HTTP Telegram : %s", exc)
+                time.sleep(2)
+                continue
             except TelegramAPIError as exc:
                 retry_after = exc.parameters.get("retry_after")
+                if "unauthorized" in str(exc.description).lower():
+                    logger.error("Token Telegram rejete par l'API : arret du worker.")
+                    return 2
                 logger.error("getUpdates refuse par Telegram : %s", exc.description)
                 time.sleep(min(int(retry_after) if retry_after else 5, 30))
                 continue
@@ -100,16 +115,25 @@ class TelegramWorker:
         return 0
 
     def run_once(self) -> int:
-        """Un cycle getUpdates : traite chaque update puis avance l'offset."""
+        """Un cycle getUpdates : traite chaque update puis avance l'offset.
+        En cas d'echec de traitement, l'offset n'est PAS avance (bug 4) afin
+        que Telegram re-livre l'update au cycle suivant, et le reste du lot
+        est abandonne pour cette fois (re-essai avec le meme offset)."""
         updates = self.client.get_updates(offset=self._load_offset())
+        processed = 0
         for update in updates:
             update_id = int(update.get("update_id") or 0)
             try:
                 self.handle_update(update)
             except Exception:
-                logger.exception("Update %s non traite", update_id)
+                logger.exception(
+                    "Update %s non traite : offset non avance, re-essai au prochain cycle",
+                    update_id,
+                )
+                break
             self._save_offset(update_id + 1)
-        return len(updates)
+            processed += 1
+        return processed
 
     def handle_update(self, update: dict) -> None:
         """Traite UN update : dedup exactement-une-fois + dispatch. Public
@@ -138,7 +162,10 @@ class TelegramWorker:
         elif text in ("/aide", "/help"):
             self._send(chat_id, _HELP)
         elif text == "/stop":
-            session_store.delete_plan(telegram_service.session_id_for(chat_id))
+            try:
+                session_store.delete_plan(telegram_service.session_id_for(chat_id))
+            except Exception:
+                logger.warning("Redis indisponible : session non purgee")
             self._send(chat_id, "Conversation reinitialisee.")
         else:
             self._chat(chat_id, text)
@@ -151,22 +178,26 @@ class TelegramWorker:
             return
         db = session_factory()
         try:
-            record = telegram_service.consume_link_token(db, token)
+            # Bug 6 : on valide le compte SANS consommer le token, pour ne pas
+            # bruler un token inutilisable (compte inactif) -> l'utilisateur
+            # peut reagir apres reactivation sans en regenerer un.
+            record = telegram_service.find_link_token(db, token)
             if record is None:
                 self._send(chat_id, "Token invalide, expire ou deja utilise.")
                 return
-            try:
-                binding = telegram_service.create_binding(
-                    db,
-                    chat_id,
-                    token=record,
-                    tg_username=sender.get("username"),
-                    tg_user_id=sender.get("id"),
-                )
-            except ValueError as exc:
-                self._send(chat_id, str(exc))
+            user = db.get(User, record.user_id)
+            if user is None or user.status != UserStatus.ACTIVE:
+                self._send(chat_id, "Le compte associe au token est introuvable ou inactif.")
                 return
-            self._send(chat_id, f"Compte lie. Bonjour ! Pose ta question ou envoie /aide.")
+            consumed = telegram_service.consume_link_token(db, token)
+            binding = telegram_service.create_binding(
+                db,
+                chat_id,
+                token=consumed,
+                tg_username=sender.get("username"),
+                tg_user_id=sender.get("id"),
+            )
+            self._send(chat_id, "Compte lie. Pose ta question ou envoie /aide.")
         finally:
             db.close()
 
@@ -189,8 +220,11 @@ class TelegramWorker:
             )
             telegram_service.touch_last_seen(db, binding)
         except Exception as exc:
+            # Bug 3 corrige : un echec d'envoi en aval ne doit pas remonter
+            # ici (le detail de l'erreur reste dans les logs serveur, jamais
+            # expose a l'utilisateur du bot).
             logger.exception("Erreur lors du traitement du message")
-            self._send(chat_id, f"Erreur inattendue : {exc}")
+            self._send(chat_id, "Une erreur interne est survenue. Reessaie ou utilise l'application web.")
             return
         finally:
             db.close()
@@ -201,12 +235,20 @@ class TelegramWorker:
             self._send_chunk(chat_id, chunk)
 
     def _send_chunk(self, chat_id: int, message: str) -> None:
+        """Envoie avec un re-essai, mais ne leve JAMAIS (bug 3) : un echec
+        d'envoi ne doit pas faire croire a run_once que l'update est a
+        re-tenter (sinon Telegram le re-livrerait et le journal le de-dupliquera
+        -> succes silencieux). L'echec est logue, l'utilisateur ne reçoit
+        simplement pas de boite de retour pour cet envoi."""
         try:
             self.client.send_message(chat_id, message)
         except (TelegramAPIError, httpx.HTTPError) as exc:
             logger.warning("Envoi Telegram a echoue (%s), nouvel essai.", exc)
             time.sleep(1)
-            self.client.send_message(chat_id, message)
+            try:
+                self.client.send_message(chat_id, message)
+            except (TelegramAPIError, httpx.HTTPError) as exc:
+                logger.error("Re-essai d'envoi Telegram a echoue : %s", exc)
 
     # -- exactly-once --------------------------------------------------------
 
@@ -231,11 +273,29 @@ class TelegramWorker:
     # -- offset persiste (Redis, best-effort) --------------------------------
 
     def _load_offset(self) -> int | None:
+        """Offset persiste dans Redis si present ; sinon reprise depuis le
+        journal SQL (max(update_id) + 1). Recouvre la perte de Redis sans
+        rejouer 24h d'updates (le journal les de-dupliquerait de toute facon)."""
+        offset: int | None = None
         try:
             raw = session_store.get_redis_client().get(_OFFSET_KEY)
-            return int(raw) if raw is not None else None
+            offset = int(raw) if raw is not None else None
         except Exception:
-            return None
+            offset = None
+        if offset is None:
+            offset = self._journal_max_update_id()
+        return offset
+
+    @staticmethod
+    def _journal_max_update_id() -> int | None:
+        """Haut de fourchette du journal : aucun update <= max n'est a rejouer
+        (le traitement est sequentiel et mono-offset, donc monotone)."""
+        db = session_factory()
+        try:
+            mx = db.query(func.max(TelegramMessage.update_id)).scalar()
+        finally:
+            db.close()
+        return int(mx) + 1 if mx is not None else None
 
     def _save_offset(self, offset: int) -> None:
         try:

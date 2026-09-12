@@ -9,6 +9,9 @@ Aucun acces reseau : le client Telegram est injecte (fake) et le moteur
 assistant est neutralise (chat suturé) pour que les assertions portent sur le
 cablage du worker, pas sur le moteur (teste ailleurs, test_assistantv2.py).
 """
+import time
+
+import httpx
 import pytest
 
 from app.core.db import session as session_factory
@@ -50,11 +53,14 @@ class _FakeTelegramClient:
     def __init__(self, updates=None):
         self.updates = updates or []
         self.sent: list[tuple[int, str]] = []
+        self.fail_send = False
 
     def get_updates(self, offset=None, **kwargs):
         return self.updates
 
     def send_message(self, chat_id, text):
+        if self.fail_send:
+            raise httpx.HTTPError("envoi KO")
         self.sent.append((chat_id, text))
         return 1
 
@@ -113,9 +119,9 @@ def test_token_me_unlink_flow(client, root):
     res = client.delete("/api/telegram/bindings/me", headers=auth_headers(root))
     assert res.status_code == 204
 
+    # Bug 5 : "me" reflete le lien ACTIF ; apres debranchement, plus de lien.
     me = client.get("/api/telegram/bindings/me", headers=auth_headers(root)).json()
-    assert me["linked"] is True
-    assert me["active"] is False
+    assert me["linked"] is False
 
 
 def test_token_me_requires_auth(client):
@@ -286,3 +292,113 @@ def test_worker_stop_resets_session(root, _fake_redis):
     worker.handle_update(_update(update_id=1, chat_id=CHAT_ID, text="/stop"))
     assert f"tg:{CHAT_ID}" not in _fake_redis
     assert client.sent and "reinitialisee" in client.sent[0][1]
+
+
+# --- Regressions (bugs detectes en relecture) ---------------------------------
+
+
+def test_worker_run_once_does_not_advance_offset_on_failure(monkeypatch):
+    """Bug 4 : si le traitement d'un update echoue (ex. ecriture du journal),
+    l'offset ne doit PAS etre avance, sinon Telegram ne re-livrera jamais cet
+    update (commande perdue)."""
+    client = _FakeTelegramClient(
+        updates=[_update(update_id=100, chat_id=CHAT_ID, text="salut")]
+    )
+    worker = TelegramWorker(client=client)
+    worker.run_once()
+    assert worker._load_offset() == 101
+
+    client.updates = [_update(update_id=101, chat_id=CHAT_ID, text="depense 5000")]
+
+    def broken_record(*args, **kwargs):
+        raise RuntimeError("DB down")
+
+    monkeypatch.setattr(TelegramWorker, "_record_in", staticmethod(broken_record))
+    worker.run_once()
+    assert worker._load_offset() == 101  # pas d'avance apres echec
+
+
+def test_worker_send_failure_logs_without_raising(root, monkeypatch):
+    """Bug 3 : un echec d'envoi de la reponse (apres execution reussie) ne doit
+    ni faire planter handle_update, ni bloquer l'avance de l'offset (sinon
+    Telegram re-livre l'update et le journal le saute : succes silencieux)."""
+    db = session_factory()
+    token = telegram_service.create_link_token(db, root).token
+    db.close()
+
+    calls: list[tuple] = []
+
+    def fake_chat(db_, user, message, session_id):
+        calls.append(1)
+        return AssistantReplyV2(text="ok", session_id=session_id)
+
+    monkeypatch.setattr("app.modules.assistantv2.service.chat", fake_chat)
+    monkeypatch.setattr("app.modules.assistantv2.telegram.worker.time", _noop_time())
+
+    client = _FakeTelegramClient()
+    worker = TelegramWorker(client=client)
+    worker.handle_update(_update(update_id=1, chat_id=CHAT_ID, text=f"/start {token}"))
+
+    client.sent.clear()
+    client.fail_send = True
+    worker.handle_update(_update(update_id=2, chat_id=CHAT_ID, text="solde caisse"))
+    assert calls == [1]  # la commande a ete executee
+    assert client.sent == []  # la reponse n'a pas pu partir, echec logge
+
+
+def test_worker_run_forever_terminates_on_401(monkeypatch):
+    """Bug 2 : si Telegram rejette le token en cours de route (401), le worker
+    doit s'arreter (code 2) et non boucler indefiniment a poller en 401."""
+    from httpx import HTTPStatusError, Request, Response
+
+    client = _FakeTelegramClient()
+
+    def get_updates_401(offset=None, **kwargs):
+        raise HTTPStatusError(
+            "401 Unauthorized",
+            request=Request("GET", "http://test"),
+            response=Response(401),
+        )
+
+    client.get_updates = get_updates_401
+    monkeypatch.setattr(
+        "app.modules.assistantv2.telegram.worker.time", _noop_time(raise_on_sleep=True)
+    )
+    code = TelegramWorker(client=client).run_forever()
+    assert code == 2
+
+
+def test_worker_start_inactive_does_not_consume_token(root):
+    """Bug 6 : un compte inactif refuse la liaison SANS bruler le token
+    (sinon l'utilisateur doit en regenerer un apres reactivation)."""
+    db = session_factory()
+    token = telegram_service.create_link_token(db, root).token
+    user = db.get(User, root.id)
+    user.status = UserStatus.INACTIVE
+    db.commit()
+    db.close()
+
+    client = _FakeTelegramClient()
+    worker = TelegramWorker(client=client)
+    worker.handle_update(_update(update_id=1, chat_id=CHAT_ID, text=f"/start {token}"))
+    assert client.sent and "inactif" in client.sent[0][1]
+
+    db = session_factory()
+    user = db.get(User, root.id)
+    user.status = UserStatus.ACTIVE
+    db.commit()
+    db.close()
+
+    db = session_factory()
+    record = telegram_service.consume_link_token(db, token)
+    db.close()
+    assert record is not None  # token encore consommable
+
+
+class _noop_time:
+    def __init__(self, raise_on_sleep=False):
+        self._raise = raise_on_sleep
+
+    def sleep(self, seconds):
+        if self._raise:
+            raise RuntimeError("boucle infinie : le worker aurait du s'arreter")
