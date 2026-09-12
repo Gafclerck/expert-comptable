@@ -88,7 +88,11 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; margin: 0; padding: 0; }
+/* Hauteur definie (pas seulement min-height) : indispensable pour que les
+   hauteurs en % (h-full de AppLayout) se resoluent. Sans cela la coquille
+   s'etire au contenu, le scroll se fait sur le body et la sidebar defile
+   avec la page au lieu de rester fixe avec son propre scroll. */
+html, body, #root { height: 100%; min-height: 100%; margin: 0; padding: 0; }
 body {
   font-family: var(--font-family-primary);
   background: var(--color-background-primary);
