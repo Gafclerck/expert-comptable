@@ -29,6 +29,8 @@ _EVENT_ACTIONS = {
     "poultry.purchase.created": ("poultry_purchases", AuditAction.CREATE, None),
     "poultry.sale.created": ("poultry_sales", AuditAction.CREATE, None),
     "assistant.command.executed": ("assistant_commands", AuditAction.CREATE, None),
+    "telegram.binding.created": ("telegram_bindings", AuditAction.CREATE, None),
+    "telegram.binding.removed": ("telegram_bindings", AuditAction.UPDATE, None),
 }
 
 
