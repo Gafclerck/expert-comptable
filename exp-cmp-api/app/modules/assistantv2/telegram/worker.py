@@ -37,6 +37,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 MAX_MESSAGE_CHARS = 1000  # ChatIn.max_length du moteur v2
 MAX_CHUNK_CHARS = 4096  # limite API Telegram (sendMessage)
+MAX_SEND_ATTEMPTS = 3  # retries d'envoi bornes (429/retry_after, reseau)
 
 _HELP = (
     "Assistant comptable. Commandes :\n"
@@ -235,20 +236,40 @@ class TelegramWorker:
             self._send_chunk(chat_id, chunk)
 
     def _send_chunk(self, chat_id: int, message: str) -> None:
-        """Envoie avec un re-essai, mais ne leve JAMAIS (bug 3) : un echec
-        d'envoi ne doit pas faire croire a run_once que l'update est a
-        re-tenter (sinon Telegram le re-livrerait et le journal le de-dupliquera
-        -> succes silencieux). L'echec est logue, l'utilisateur ne reçoit
-        simplement pas de boite de retour pour cet envoi."""
-        try:
-            self.client.send_message(chat_id, message)
-        except (TelegramAPIError, httpx.HTTPError) as exc:
-            logger.warning("Envoi Telegram a echoue (%s), nouvel essai.", exc)
-            time.sleep(1)
+        """Envoie avec retries bornes et conscients de `retry_after` (Phase 2 :
+        anti 429/flood de la Bot API). Ne leve JAMAIS (bug 3) : un echec final
+        est logue, jamais propage a run_once (sinon Telegram re-livrerait un
+        update deja journalise -> succes silencieux)."""
+        attempts = 0
+        while True:
+            attempts += 1
             try:
                 self.client.send_message(chat_id, message)
-            except (TelegramAPIError, httpx.HTTPError) as exc:
-                logger.error("Re-essai d'envoi Telegram a echoue : %s", exc)
+                return
+            except TelegramAPIError as exc:
+                retry_after = exc.parameters.get("retry_after")
+                if retry_after is not None and attempts < MAX_SEND_ATTEMPTS:
+                    try:
+                        wait = min(int(retry_after), 30)
+                    except (TypeError, ValueError):
+                        wait = 5
+                    time.sleep(wait)
+                    continue
+                logger.error(
+                    "Envoi Telegram refuse apres %s tentative(s) : %s",
+                    attempts,
+                    exc.description,
+                )
+                return
+            except httpx.HTTPError as exc:
+                if attempts >= MAX_SEND_ATTEMPTS:
+                    logger.error(
+                        "Envoi Telegram indisponible apres %s tentative(s) : %s",
+                        attempts,
+                        exc,
+                    )
+                    return
+                time.sleep(1)
 
     # -- exactly-once --------------------------------------------------------
 

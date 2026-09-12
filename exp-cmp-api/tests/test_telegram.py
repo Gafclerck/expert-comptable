@@ -368,6 +368,54 @@ def test_worker_run_forever_terminates_on_401(monkeypatch):
     assert code == 2
 
 
+def test_worker_restart_no_replay_no_loss(root, monkeypatch, _fake_redis):
+    """Phase 2 AC : couper le worker puis le relancer (nouvelle instance,
+    offset Redis perdu) -> aucune commande rejouee (journal), aucune update
+    perdue (reprise depuis max(update_id) du journal), conversation reprise
+    depuis Redis (plan non purge)."""
+    from app.modules.assistantv2.plan import Plan
+
+    db = session_factory()
+    token = telegram_service.create_link_token(db, root).token
+    db.close()
+
+    calls: list[tuple] = []
+
+    def fake_chat(db_, user, message, session_id):
+        calls.append((message, session_id))
+        return AssistantReplyV2(text="ok", session_id=session_id)
+
+    monkeypatch.setattr("app.modules.assistantv2.service.chat", fake_chat)
+
+    client = _FakeTelegramClient()
+    worker = TelegramWorker(client=client)  # process 1
+    worker.handle_update(_update(update_id=1, chat_id=CHAT_ID, text=f"/start {token}"))
+
+    # Une session en cours (plan Redis) doit survivre au redemarrage.
+    session_store = __import__("app.modules.assistantv2.session_store", fromlist=["session_store"])
+    session_store.save_plan(Plan(session_id=f"tg:{CHAT_ID}", user_message="depense 5000"))
+
+    client.updates = [_update(update_id=300, chat_id=CHAT_ID, text="depense 5000 carburant")]
+    worker.run_once()
+    assert [m for m, _ in calls] == ["depense 5000 carburant"]
+
+    # Crash du process (Redis survit) : l'offset Redis disparait de maniere
+    # imprevisible, Telegram re-livre 300 puis un nouveau 301. Le plan de la
+    # conversation est toujours la (a rejouer par le process relance).
+    _fake_redis.pop("assistantv2:telegram:offset", None)
+    client.updates = [
+        _update(update_id=300, chat_id=CHAT_ID, text="depense 5000 carburant"),
+        _update(update_id=301, chat_id=CHAT_ID, text="depense 2000 carburant"),
+    ]
+    worker2 = TelegramWorker(client=client)  # process 2, memes tables + Redis
+    assert worker2._load_offset() == 301  # reintroduit depuis le journal
+    worker2.run_once()
+
+    assert [m for m, _ in calls] == ["depense 5000 carburant", "depense 2000 carburant"]
+    assert all(sid == f"tg:{CHAT_ID}" for _, sid in calls)
+    assert f"assistantv2:plan:tg:{CHAT_ID}" in _fake_redis  # conversation reprise
+
+
 def test_worker_start_inactive_does_not_consume_token(root):
     """Bug 6 : un compte inactif refuse la liaison SANS bruler le token
     (sinon l'utilisateur doit en regenerer un apres reactivation)."""
