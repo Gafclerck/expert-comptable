@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 _CANCEL = {"annuler", "annule", "cancel", "stop", "quitter"}
 _AFFIRMATIVE = {"oui", "ok", "d'accord", "daccord", "confirme", "confirmer", "yes", "vas-y", "vasy", "valide", "go"}
-_RESOLVABLE_FIELDS = {"contract", "account", "category"}
+_RESOLVABLE_FIELDS = {"contract", "account", "category", "driver", "vehicle"}
 
 
 def _new_session_id() -> str:
@@ -236,7 +236,7 @@ def _is_present_and_valid(field: str, value) -> bool:
         return False
     if field == "quantity":
         return isinstance(value, int) and value > 0
-    if field in ("amount", "premium"):
+    if field in ("amount", "premium", "expected_amount"):
         return isinstance(value, Decimal) and value > 0
     return True
 
@@ -274,6 +274,26 @@ def _resolve_field(db: Session, actor, spec, step: PlanStep, field: str) -> None
             )
         else:
             raise resolvers.ClarificationNeeded("category", "Aucune categorie de ce type.")
+    elif field == "driver":
+        ref = params.get("driver")
+        if not ref:
+            return
+        try:
+            driver = resolvers.resolve_driver(db, actor, ref)
+        except HTTPException as exc:
+            raise resolvers.ClarificationNeeded("driver", str(exc.detail))
+        params["driver_id"] = str(driver["id"])
+        params["driver_name"] = driver["full_name"]
+    elif field == "vehicle":
+        ref = params.get("vehicle")
+        if not ref:
+            return
+        try:
+            vehicle = resolvers.resolve_vehicle(db, actor, ref)
+        except HTTPException as exc:
+            raise resolvers.ClarificationNeeded("vehicle", str(exc.detail))
+        params["vehicle_id"] = str(vehicle.id)
+        params["vehicle_label"] = f"{vehicle.make} {vehicle.model} ({vehicle.registration})"
 
 
 def _fill_field(db: Session, actor, step: PlanStep, field: str, message: str, choices: list[dict]) -> bool:
@@ -290,7 +310,7 @@ def _fill_field(db: Session, actor, step: PlanStep, field: str, message: str, ch
             return False
         params["matricule"] = m
         return True
-    if field in ("premium", "amount"):
+    if field in ("premium", "amount", "expected_amount"):
         amount = parsing.parse_amount(message)
         if amount is None and field == "amount" and params.get("contract_id"):
             norm = parsing.normalize(message)
@@ -326,6 +346,20 @@ def _fill_field(db: Session, actor, step: PlanStep, field: str, message: str, ch
         params["contract"] = ref
         params.pop("contract_id", None)
         return True
+    if field == "driver":
+        name = parsing.extract_client_name(message) or parsing.clean_free_text(message)
+        if not name:
+            return False
+        params["driver"] = name
+        params.pop("driver_id", None)
+        return True
+    if field == "vehicle":
+        ref = parsing.clean_free_text(message) or parsing.extract_client_name(message)
+        if not ref:
+            return False
+        params["vehicle"] = ref
+        params.pop("vehicle_id", None)
+        return True
     if field == "account":
         index = _choose_index(message, choices)
         if index is not None:
@@ -341,6 +375,12 @@ def _fill_field(db: Session, actor, step: PlanStep, field: str, message: str, ch
             return True
         params["category"] = message.strip(".,")
         return True
+    if field == "affectation":
+        index = _choose_index(message, choices)
+        if index is not None:
+            params["affectation_id"] = choices[index]["id"]
+            return True
+        return False
     return False
 
 
@@ -401,6 +441,13 @@ _PARAM_LABELS = {
     "quantity": "quantite",
     "due_date": "date",
     "account_name": "caisse",
+    "driver_name": "chauffeur",
+    "vehicle_label": "vehicule",
+    "expected_amount": "montant attendu",
+    "expense_type": "type de depense",
+    "start_date": "date de debut",
+    "end_date": "date de fin",
+    "registration": "immatriculation",
 }
 
 

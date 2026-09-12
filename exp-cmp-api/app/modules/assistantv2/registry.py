@@ -39,9 +39,9 @@ class ToolSpec:
     # toute activite (ex. get_balance, help).
     business: str | None = None
     # Ordre de remplissage des champs pour la clarification (memes noms que
-    # dans `parameters`). Les champs "contract"/"account"/"category" declenchent
-    # une resolution d'entite (voir resolvers.py) ; les autres ne font l'objet
-    # que d'une verification de presence.
+    # dans `parameters`). Les champs "contract"/"account"/"category"/"driver"/
+    # "vehicle" declenchent une resolution d'entite (voir resolvers.py) ; les
+    # autres ne font l'objet que d'une verification de presence.
     order: list[str] = field(default_factory=list)
     questions: dict[str, str] = field(default_factory=dict)
     # Necessaire uniquement si "category" figure dans `order`.

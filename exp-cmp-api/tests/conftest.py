@@ -98,3 +98,9 @@ def assurance(db):
 def poulets(db):
     business = db.query(Business).filter(Business.code == "poulets").first()
     return business or Business(code="poulets", name="Poulets", status=BusinessStatus.ACTIVE)
+
+
+@pytest.fixture
+def vtc(db):
+    business = db.query(Business).filter(Business.code == "vtc").first()
+    return business or Business(code="vtc", name="VTC", status=BusinessStatus.ACTIVE)

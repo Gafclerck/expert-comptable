@@ -13,3 +13,4 @@ Rien d'autre a modifier : registry.py, orchestrator.py et core_tools.py
 from app.modules.assistantv2.tools import core_tools  # noqa: F401
 from app.modules.assistantv2.tools import insurance_tools  # noqa: F401
 from app.modules.assistantv2.tools import poultry_tools  # noqa: F401
+from app.modules.assistantv2.tools import vtc_tools  # noqa: F401

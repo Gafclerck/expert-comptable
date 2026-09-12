@@ -11,17 +11,20 @@ assertions portent sur le texte statique, deterministe.
 """
 import json
 import uuid
+from datetime import date
 from decimal import Decimal
 
 import pytest
 
 from app.core.config import settings
 from app.modules.assistantv2 import service as assistantv2_service
+from app.modules.assistantv2.tools import vtc_tools
 from app.modules.insurance import service as insurance_service
 from app.modules.insurance.models import InsuranceContractStatus
 from app.modules.ledger import service as ledger_service
 from app.modules.ledger.models import CategoryType
 from app.modules.poultry import service as poultry_service
+from app.modules.vtc import service as vtc_service
 from tests.helpers import auth_headers
 
 
@@ -355,3 +358,129 @@ def test_get_period_summary_periode_sans_transaction(db, root, poulets, llm):
     assert reply.executed_tools == ["get_period_summary"]
     assert "hier" in reply.text.lower()
     assert "0 FCFA" in reply.text
+
+
+def _seed_vtc_chauffeur_vehicule(db, root, name="Moussa Fall", registration="DK-1234-AB"):
+    chauffeur = vtc_service.create_chauffeur(db, root, full_name=name, phone="771234567")
+    vehicule = vtc_service.create_vehicule(
+        db, root, make="Toyota", model="Corolla", year=2020,
+        registration=registration, acquisition_cost=Decimal("1500000"),
+    )
+    return chauffeur, vehicule
+
+
+def test_vtc_create_chauffeur_et_vehicule_via_llm(db, root, vtc, llm):
+    llm["queue"].append(_tool_call_message([
+        ("create_chauffeur", {"driver": "Moussa Fall", "phone": "771234567"}),
+        ("create_vehicule", {"make": "Toyota", "model": "Corolla", "registration": "DK-1234-AB"}),
+    ]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Nouveau chauffeur Moussa Fall et nouveau vehicule Toyota Corolla DK-1234-AB", None)
+
+    assert set(reply.executed_tools) == {"create_chauffeur", "create_vehicule"}
+    assert "Moussa Fall" in reply.text
+    assert "DK-1234-AB" in reply.text
+
+
+def test_vtc_list_chauffeurs_vide(db, root, vtc, llm):
+    llm["queue"].append(_tool_call_message([("list_chauffeurs", {})]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Quels sont mes chauffeurs ?", None)
+
+    assert reply.executed_tools == ["list_chauffeurs"]
+    assert "Aucun chauffeur" in reply.text
+
+
+def test_vtc_creation_affectation_puis_versement_avec_confirmation(db, root, vtc, llm):
+    _seed_vtc_chauffeur_vehicule(db, root)
+    llm["queue"].append(_tool_call_message([
+        ("create_affectation", {"driver": "Moussa Fall", "vehicle": "DK-1234-AB", "expected_amount": "50000"})
+    ]))
+
+    reply = assistantv2_service.chat(db, root, "Affecter Moussa Fall au vehicule DK-1234-AB pour 50 000", None)
+    assert reply.confirmation_required is True
+    assert reply.pending_action == "create_affectation"
+    assert "50000" in reply.text  # le montant attendu est restitue avant de demander confirmation
+
+    reply2 = assistantv2_service.chat(db, root, "oui", reply.session_id)
+    assert reply2.executed_tools == ["create_affectation"]
+    assert "Moussa Fall" in reply2.text
+
+    llm["queue"].append(_tool_call_message([
+        ("record_versement", {"driver": "Moussa Fall", "vehicle": "DK-1234-AB", "amount": "20000"})
+    ]))
+    reply3 = assistantv2_service.chat(db, root, "Moussa Fall a verse 20 000 pour DK-1234-AB", None)
+    assert reply3.confirmation_required is True
+
+    reply4 = assistantv2_service.chat(db, root, "oui", reply3.session_id)
+    assert reply4.executed_tools == ["record_versement"]
+    assert "20 000" in reply4.text
+    assert "30 000" in reply4.text  # reste a payer
+    assert "Caisse" in reply4.text  # caisse resolue par defaut
+
+
+def test_vtc_clarification_chauffeur_inconnu(db, root, vtc, llm):
+    chauffeur, _ = _seed_vtc_chauffeur_vehicule(db, root)
+    llm["queue"].append(_tool_call_message([("get_chauffeur_sold", {"driver": "Personne Inconnue"})]))
+
+    reply = assistantv2_service.chat(db, root, "Reste a payer de Personne Inconnue ?", None)
+    assert reply.clarification is True
+    assert reply.missing_field == "driver"
+    assert "Aucun chauffeur" in reply.text
+
+    reply2 = assistantv2_service.chat(db, root, "Moussa Fall", reply.session_id)
+    assert reply2.executed_tools == ["get_chauffeur_sold"]
+    assert "Moussa Fall" in reply2.text
+    assert "0 FCFA" in reply2.text
+
+
+def test_vtc_end_affectation_avec_confirmation(db, root, vtc, llm):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    vtc_service.create_affectation(
+        db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id,
+        start_date=date.today(), expected_amount=Decimal("50000"),
+    )
+    llm["queue"].append(_tool_call_message([
+        ("end_affectation", {"driver": "Moussa Fall", "vehicle": "DK-1234-AB"})
+    ]))
+
+    reply = assistantv2_service.chat(db, root, "Cloturer l'affectation de Moussa Fall sur DK-1234-AB", None)
+    assert reply.confirmation_required is True
+
+    reply2 = assistantv2_service.chat(db, root, "oui", reply.session_id)
+    assert reply2.executed_tools == ["end_affectation"]
+    assert "terminee" in reply2.text.lower()
+
+
+def test_vtc_declare_indisponibilite_puis_statistiques(db, root, vtc, llm):
+    _seed_vtc_chauffeur_vehicule(db, root)
+    llm["queue"].append(_tool_call_message([
+        ("declare_indisponibilite", {"vehicle": "DK-1234-AB", "reason": "Panne moteur"})
+    ]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "DK-1234-AB est en panne aujourd'hui", None)
+    assert reply.executed_tools == ["declare_indisponibilite"]
+    assert "DK-1234-AB" in reply.text
+
+
+def test_vtc_resume_financier_direct(db, root, vtc):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    affectation = vtc_service.create_affectation(
+        db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id,
+        start_date=date.today(), expected_amount=Decimal("50000"),
+    )
+    account = ledger_service.list_accounts(db, root, vtc.id)[0]
+    category = next(c for c in ledger_service.list_categories(db) if c.type == CategoryType.CREDIT)
+    vtc_service.create_versement(
+        db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id,
+        amount=Decimal("20000"), account_id=account.id, category_id=category.id,
+    )
+
+    facts, target_id, text = vtc_tools.get_resume_financier(db, root, {})
+    assert target_id is None
+    assert "20 000" in text
+    assert facts["kind"] == "get_resume_financier"
+    assert facts["net"].endswith("FCFA")

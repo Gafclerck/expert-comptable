@@ -212,7 +212,7 @@ def coerce_params(raw: dict) -> dict:
             continue
         if key == "_confirmed":
             params[key] = bool(value)
-        elif key in ("amount", "premium"):
+        elif key in ("amount", "premium", "expected_amount", "acquisition_cost"):
             try:
                 params[key] = Decimal(str(value).replace(" ", "").replace(",", "."))
             except Exception:
@@ -222,7 +222,12 @@ def coerce_params(raw: dict) -> dict:
                 params[key] = int(value)
             except (TypeError, ValueError):
                 continue
-        elif key == "due_date":
+        elif key == "year":
+            try:
+                params[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        elif key in ("due_date", "start_date", "end_date"):
             try:
                 params[key] = date.fromisoformat(str(value)[:10])
             except ValueError:

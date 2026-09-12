@@ -23,6 +23,7 @@ from app.modules.identity.service import get_business_ids_for_user, get_person_s
 from app.modules.insurance import service as insurance_service
 from app.modules.ledger import service as ledger_service
 from app.modules.ledger.models import CategoryType
+from app.modules.vtc import service as vtc_service
 
 DEFAULT_ACCOUNT_NAME = "Caisse Principale"
 
@@ -136,6 +137,65 @@ def resolve_contract(db: Session, actor, ref: str):
         return contracts[0]
     matricules = ", ".join(c.matricule for c in contracts)
     raise HTTPException(status_code=400, detail=f"Plusieurs contrats pour ce client: {matricules}. Precisez la matricule.")
+
+
+def resolve_driver(db: Session, actor, ref: str | None = None):
+    """Nom de chauffeur -> dict chauffeur unique. Sans reference, un seul
+    chauffeur actif suffit ; sinon ClarificationNeeded avec les candidats."""
+    drivers = vtc_service.list_chauffeurs(db, actor)
+    if not drivers:
+        raise ClarificationNeeded("driver", "Aucun chauffeur enregistre dans l'activite VTC.")
+    if ref:
+        matches = [d for d in drivers if name_match(d["full_name"], ref)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ClarificationNeeded(
+                "driver",
+                "Plusieurs chauffeurs correspondent, lequel ?",
+                [{"name": d["full_name"], "id": str(d["id"])} for d in matches],
+            )
+        raise ClarificationNeeded("driver", f"Aucun chauffeur trouve pour \"{ref}\".")
+    if len(drivers) == 1:
+        return drivers[0]
+    raise ClarificationNeeded(
+        "driver",
+        "Quel chauffeur ?",
+        [{"name": d["full_name"], "id": str(d["id"])} for d in drivers],
+    )
+
+
+def _vehicle_label(v) -> str:
+    return f"{v.make} {v.model} ({v.registration})"
+
+
+def resolve_vehicle(db: Session, actor, ref: str | None = None):
+    """Immatriculation / marque-modele -> vehicule unique. Sans reference, un
+    seul vehicule suffit ; sinon ClarificationNeeded avec les candidats."""
+    vehicles = vtc_service.list_vehicules(db, actor)
+    if not vehicles:
+        raise ClarificationNeeded("vehicle", "Aucun vehicule enregistre dans l'activite VTC.")
+    if ref:
+        matches = [
+            v for v in vehicles
+            if name_match(v.registration, ref) or name_match(_vehicle_label(v), ref)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ClarificationNeeded(
+                "vehicle",
+                "Plusieurs vehicules correspondent, lequel ?",
+                [{"name": _vehicle_label(v), "id": str(v.id)} for v in matches],
+            )
+        raise ClarificationNeeded("vehicle", f"Aucun vehicule trouve pour \"{ref}\".")
+    if len(vehicles) == 1:
+        return vehicles[0]
+    raise ClarificationNeeded(
+        "vehicle",
+        "Quel vehicule ?",
+        [{"name": _vehicle_label(v), "id": str(v.id)} for v in vehicles],
+    )
 
 
 def resolve_account(db: Session, actor, business_id: uuid.UUID, ref: str | None = None):
