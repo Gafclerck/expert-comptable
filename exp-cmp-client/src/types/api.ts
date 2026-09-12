@@ -298,3 +298,123 @@ export interface AssistantReply {
   confirmation_required: boolean;
   pending_action: string | null;
 }
+
+// ─── VTC ──────────────────────────────────────────────────────
+
+export type ChauffeurStatus = 'active' | 'inactive';
+export type VehiculeStatus = 'active' | 'out_of_service' | 'sold';
+export type AffectationStatus = 'active' | 'ended';
+export type TypeDepenseVehicule =
+  | 'fuel' | 'maintenance' | 'repair' | 'tires'
+  | 'insurance' | 'registration' | 'misc';
+
+export interface ChauffeurOut {
+  id: string;
+  person_id: string;
+  full_name: string;
+  phone: string | null;
+  license_number: string | null;
+  status: ChauffeurStatus;
+  created_at: string;
+}
+
+export interface VehiculeOut {
+  id: string;
+  business_id: string;
+  make: string;
+  model: string;
+  year: number | null;
+  registration: string;
+  acquisition_cost: number;
+  status: VehiculeStatus;
+  created_at: string;
+}
+
+export interface AffectationOut {
+  id: string;
+  driver_id: string;
+  vehicle_id: string;
+  driver_name: string | null;
+  vehicle_registration: string | null;
+  start_date: string;
+  end_date: string | null;
+  expected_amount: number;
+  paid_amount: number;
+  remaining_amount: number;
+  terms: string | null;
+  status: AffectationStatus;
+  created_at: string;
+}
+
+export interface VersementOut {
+  id: string;
+  assignment_id: string;
+  driver_id: string;
+  vehicle_id: string;
+  amount: number;
+  paid_at: string;
+  transaction_id: string;
+  created_at: string;
+}
+
+export interface DepenseOut {
+  id: string;
+  vehicle_id: string;
+  expense_type: TypeDepenseVehicule;
+  amount: number;
+  quantity: number | null;
+  unit: string | null;
+  description: string | null;
+  occurred_at: string;
+  transaction_id: string;
+  created_at: string;
+}
+
+export interface StatistiquesVehiculeOut {
+  vehicle_id: string;
+  make: string;
+  model: string;
+  registration: string;
+  versements: number;
+  depenses: number;
+  rentabilite: number;
+  depenses_par_type: Record<string, number>;
+  cout_acquisition: number;
+}
+
+export interface TotalsOut {
+  versements: number;
+  depenses: number;
+  net: number;
+}
+
+export interface PerVehicleOut {
+  vehicle_id: string;
+  make: string;
+  model: string;
+  registration: string;
+  versements: number;
+  depenses: number;
+  net: number;
+}
+
+export interface CountsOut {
+  vehicules_actifs: number;
+  chauffeurs_actifs: number;
+  affectations_actives: number;
+}
+
+export interface ResumeFinancierOut {
+  business_id: string;
+  totals: TotalsOut;
+  per_vehicle: PerVehicleOut[];
+  counts: CountsOut;
+}
+
+export interface StatutPaiementOut {
+  driver_id: string;
+  total_expected: number;
+  total_paid: number;
+  total_remaining: number;
+  assignments: Record<string, unknown>[];
+}

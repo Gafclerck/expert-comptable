@@ -10,20 +10,14 @@ const navItems: NavItem[] = [
   { id: 'poulets', label: 'Poulets', icon: 'package', path: '/poulets', group: 'activites' },
   { id: 'vtc', label: 'VTC', icon: 'car', path: '/vtc', group: 'activites' },
   { id: 'transactions', label: 'Transactions', icon: 'arrows', path: '/transactions', group: 'finances' },
-  { id: 'creances', label: 'Créances & dettes', icon: 'circle', path: '/creances', group: 'finances', badge: 3 },
-  { id: 'financements', label: 'Financements internes', icon: 'repeat', path: '/financements', group: 'finances' },
   { id: 'comptes', label: 'Comptes & caisses', icon: 'wallet', path: '/comptes', group: 'finances' },
-  { id: 'avances', label: 'Avances à justifier', icon: 'clock', path: '/avances', group: 'controle', badge: 2 },
   { id: 'personnes', label: 'Personnes', icon: 'users', path: '/personnes', group: 'controle' },
-  { id: 'rappels', label: 'Rappels', icon: 'bell', path: '/rappels', group: 'suivi', badge: 4 },
   { id: 'assistant', label: 'Assistant IA', icon: 'sparkles', path: '/assistant', group: 'suivi' },
-  { id: 'rapports', label: 'Rapports', icon: 'chart', path: '/rapports', group: 'outils' },
-  { id: 'documents', label: 'Documents', icon: 'file', path: '/documents', group: 'outils' },
   { id: 'utilisateurs', label: 'Utilisateurs', icon: 'user-plus', path: '/utilisateurs', group: 'admin' },
   { id: 'audit', label: 'Audit', icon: 'list', path: '/audit', group: 'admin' },
   { id: 'parametres', label: 'Paramètres', icon: 'settings', path: '/parametres', group: 'admin' },
 ];
-const groups = [['principal', ''], ['activites', 'Activités'], ['finances', 'Finances'], ['controle', 'Contrôle'], ['suivi', 'Suivi'], ['outils', 'Outils'], ['admin', 'Administration']] as const;
+const groups = [['principal', ''], ['activites', 'Activités'], ['finances', 'Finances'], ['controle', 'Contrôle'], ['suivi', 'Suivi'], ['admin', 'Administration']] as const;
 interface SidebarProps { collapsed?: boolean; onToggleCollapse?: () => void; userName?: string; userRole?: string; }
 
 function initials(name: string) { const parts = name.trim().split(/\s+/).filter(Boolean); return (parts[0]?.[0] ?? 'E') + (parts[1]?.[0] ?? 'C'); }

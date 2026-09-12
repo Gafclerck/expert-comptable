@@ -1,106 +1,105 @@
 import { useState } from 'react';
 import { formatCFA } from '@/utils/format';
-import { fetchVehicles, fetchDrivers } from '@/services/mock';
+import {
+  fetchVtcAffectations, fetchVtcChauffeurs, fetchVtcResumeFinancier,
+  fetchVtcStatutPaiement, fetchVtcVehiculeStats, fetchVtcVehicules, fetchVtcVersements,
+} from '@/services';
 import { useApiQuery } from '@/hooks/useApiQuery';
-import type { Vehicle, Driver } from '@/types';
+import type {
+  ChauffeurOut, ChauffeurStatus, ResumeFinancierOut, StatistiquesVehiculeOut,
+  StatutPaiementOut, VehiculeOut, VehiculeStatus, VersementOut,
+} from '@/types/api';
 import Badge from '@/components/ui/Badge';
 import Modal from '@/components/ui/Modal';
 
-const recentDays = Array.from({ length: 7 }, (_, i) => {
-  const d = new Date();
-  d.setDate(d.getDate() - (6 - i));
-  return d.toISOString().slice(0, 10);
-});
-const frDayShort = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
-const dayLabels: Record<string, string> = Object.fromEntries(
-  recentDays.map(day => {
-    const d = new Date(day + 'T12:00:00');
-    return [day, `${frDayShort[d.getDay()]} ${d.getDate()}`];
-  })
-);
+const vehiculeStatusLabel: Record<VehiculeStatus, { label: string; variant: 'success' | 'warning' | 'neutral' }> = {
+  active: { label: 'Actif', variant: 'success' },
+  out_of_service: { label: 'Hors service', variant: 'warning' },
+  sold: { label: 'Vendu', variant: 'neutral' },
+};
+
+const chauffeurStatusLabel: Record<ChauffeurStatus, { label: string; variant: 'success' | 'neutral' }> = {
+  active: { label: 'Actif', variant: 'success' },
+  inactive: { label: 'Inactif', variant: 'neutral' },
+};
+
+const typeDepenseLabel: Record<string, string> = {
+  fuel: 'Carburant', maintenance: 'Entretien', repair: 'Réparation', tires: 'Pneus',
+  insurance: 'Assurance', registration: 'Immatriculation', misc: 'Divers',
+};
+
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 p-4">
+      <div className="text-xs font-medium text-slate-500 uppercase tracking-wide p-2">{label}</div>
+      <div className={`font-financial text-xl font-semibold ${color}`}>{formatCFA(value)}</div>
+    </div>
+  );
+}
 
 export default function VTC() {
-  const { data: rawVehicles, loading: loadingVehicles } = useApiQuery(fetchVehicles, []);
-  const { data: rawDrivers, loading: loadingDrivers } = useApiQuery(fetchDrivers, []);
+  const { data: resume, loading: loadingResume } = useApiQuery<ResumeFinancierOut>(() => fetchVtcResumeFinancier(), []);
+  const { data: rawVehicles, loading: loadingVehicles } = useApiQuery<VehiculeOut[]>(() => fetchVtcVehicules(), []);
+  const { data: rawDrivers, loading: loadingDrivers } = useApiQuery<ChauffeurOut[]>(() => fetchVtcChauffeurs(), []);
+  const { data: rawAffectations, loading: loadingAffectations } = useApiQuery(() => fetchVtcAffectations({ status: 'active' }), []);
 
-  const vehicles: Vehicle[] = (rawVehicles ?? []).map((r: any) => ({
-    id: r.id,
-    name: r.name ?? '',
-    brand: r.brand ?? '',
-    model: r.model ?? '',
-    plate: r.plate ?? '',
-    year: r.year ?? '',
-    status: (r.status ?? 'active') as Vehicle['status'],
-    acquisitionCost: Number(r.acquisition_cost ?? 0),
-    initialExpenses: Number(r.initial_expenses ?? 0),
-    fuelCost: Number(r.fuel_cost ?? 0),
-    maintenanceCost: Number(r.maintenance_cost ?? 0),
-    repairCost: Number(r.repair_cost ?? 0),
-    insuranceCost: Number(r.insurance_cost ?? 0),
-    totalRevenue: Number(r.total_revenue ?? 0),
-    currentDriverId: r.current_driver_id ?? null,
-  }));
+  const [selectedVehicle, setSelectedVehicle] = useState<VehiculeOut | null>(null);
+  const [vehicleStats, setVehicleStats] = useState<StatistiquesVehiculeOut | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
-  const drivers: Driver[] = (rawDrivers ?? []).map((r: any) => {
-    const workDaysArr: any[] = r.driver_work_days ?? [];
-    const workedDays: Record<string, boolean> = Object.fromEntries(
-      workDaysArr.map((wd: any) => [wd.date, Boolean(wd.worked)])
-    );
-    return {
-      id: r.id,
-      name: r.name ?? '',
-      phone: r.phone ?? '',
-      status: (r.status ?? 'active') as Driver['status'],
-      dailyRate: Number(r.daily_rate ?? 0),
-      vehicleId: r.vehicle_id ?? null,
-      workedDays,
-      payments: (r.payments ?? []).map((p: any) => ({
-        id: p.id,
-        date: p.date ?? '',
-        amount: Number(p.amount ?? 0),
-        note: p.note,
-      })),
-    };
-  });
+  const [selectedDriver, setSelectedDriver] = useState<ChauffeurOut | null>(null);
+  const [driverPaiement, setDriverPaiement] = useState<StatutPaiementOut | null>(null);
+  const [driverVersements, setDriverVersements] = useState<VersementOut[]>([]);
+  const [driverLoading, setDriverLoading] = useState(false);
 
-  const totalRevenue = vehicles.reduce((s, v) => s + v.totalRevenue, 0);
-  const totalExpenses = vehicles.reduce((s, v) => s + v.fuelCost + v.maintenanceCost + v.repairCost + v.insuranceCost, 0);
-  const pendingPayments = drivers.reduce((s, d) => {
-    const worked = Object.values(d.workedDays).filter(Boolean).length;
-    const paid = d.payments.reduce((sp, p) => sp + p.amount, 0);
-    return s + Math.max(0, worked * d.dailyRate - paid);
-  }, 0);
-  const activityKpis = {
-    vtc: {
-      revenue: totalRevenue,
-      expenses: totalExpenses,
-      result: totalRevenue - totalExpenses,
-      pendingPayments,
-    },
-  };
-
-  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
-  const [selectedDriver, setSelectedDriver] = useState<Driver | null>(null);
   const [tab, setTab] = useState<'vehicules' | 'chauffeurs'>('vehicules');
 
-  if (loadingVehicles || loadingDrivers) return <div className="p-6 text-center text-slate-400 text-sm">Chargement…</div>;
+  const vehicles = rawVehicles ?? [];
+  const drivers = rawDrivers ?? [];
+  const affectations = rawAffectations ?? [];
+
+  const totals = resume?.totals ?? { versements: 0, depenses: 0, net: 0 };
+  const pendingPayments = affectations.reduce((s, a) => s + a.remaining_amount, 0);
+
+  const perVehicle = new Map((resume?.per_vehicle ?? []).map(v => [v.vehicle_id, v]));
+
+  function openVehicle(vehicle: VehiculeOut) {
+    setSelectedVehicle(vehicle);
+    setVehicleStats(null);
+    setStatsLoading(true);
+    fetchVtcVehiculeStats(vehicle.id)
+      .then(setVehicleStats)
+      .catch(() => setVehicleStats(null))
+      .finally(() => setStatsLoading(false));
+  }
+
+  function openDriver(driver: ChauffeurOut) {
+    setSelectedDriver(driver);
+    setDriverPaiement(null);
+    setDriverVersements([]);
+    setDriverLoading(true);
+    Promise.all([
+      fetchVtcStatutPaiement(driver.id).catch(() => null),
+      fetchVtcVersements({ driverId: driver.id }).catch(() => []),
+    ]).then(([paiement, versements]) => {
+      setDriverPaiement(paiement);
+      setDriverVersements(versements);
+    }).finally(() => setDriverLoading(false));
+  }
+
+  if (loadingResume || loadingVehicles || loadingDrivers || loadingAffectations) {
+    return <div className="p-6 text-center text-slate-400 text-sm">Chargement…</div>;
+  }
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto space-y-6">
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 p-4">
-        {[
-          { label: 'Revenus (versements)', value: activityKpis.vtc.revenue, color: 'text-emerald-600' },
-          { label: 'Dépenses', value: activityKpis.vtc.expenses, color: 'text-red-600' },
-          { label: 'Résultat net', value: activityKpis.vtc.result, color: 'text-emerald-600' },
-          { label: 'Versements attendus', value: activityKpis.vtc.pendingPayments, color: 'text-amber-600' },
-        ].map(k => (
-          <div key={k.label} className="bg-white rounded-lg border border-slate-200 p-4">
-            <div className="text-xs font-medium text-slate-500 uppercase tracking-wide p-2">{k.label}</div>
-            <div className={`font-financial text-xl font-semibold ${k.color}`}>{formatCFA(k.value)}</div>
-          </div>
-        ))}
+        <StatCard label="Revenus (versements)" value={totals.versements} color="text-emerald-600" />
+        <StatCard label="Dépenses" value={totals.depenses} color="text-red-600" />
+        <StatCard label="Résultat net" value={totals.net} color={totals.net >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+        <StatCard label="Versements attendus" value={pendingPayments} color="text-amber-600" />
       </div>
 
       {/* Tabs */}
@@ -122,40 +121,37 @@ export default function VTC() {
 
       {tab === 'vehicules' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {vehicles.length === 0 && (
+            <div className="text-sm text-slate-400 text-center py-8 md:col-span-2">Aucun véhicule enregistré.</div>
+          )}
           {vehicles.map(v => {
-            const totalExpenses = v.fuelCost + v.maintenanceCost + v.repairCost + v.insuranceCost;
-            const result = v.totalRevenue - totalExpenses;
-            const driver = drivers.find(d => d.id === v.currentDriverId);
+            const stats = perVehicle.get(v.id);
+            const revenus = stats?.versements ?? 0;
+            const depenses = stats?.depenses ?? 0;
+            const result = stats?.net ?? 0;
+            const status = vehiculeStatusLabel[v.status];
             return (
               <button
                 key={v.id}
-                onClick={() => setSelectedVehicle(v)}
+                onClick={() => openVehicle(v)}
                 className="text-left bg-white rounded-xl border border-slate-200 p-6 hover:border-navy-300 hover:shadow-sm transition-all group"
               >
                 <div className="flex items-start justify-between p-4">
                   <div>
-                    <div className="font-semibold text-slate-800 text-base">{v.name}</div>
-                    <div className="font-mono text-xs text-slate-500 mt-1">{v.plate} · {v.year}</div>
+                    <div className="font-semibold text-slate-800 text-base">{v.make} {v.model}</div>
+                    <div className="font-mono text-xs text-slate-500 mt-1">{v.registration}{v.year ? ` · ${v.year}` : ''}</div>
                   </div>
-                  <Badge variant={v.status === 'active' ? 'success' : v.status === 'maintenance' ? 'warning' : 'neutral'}>
-                    {v.status === 'active' ? 'Actif' : v.status === 'maintenance' ? 'Maintenance' : 'Inactif'}
-                  </Badge>
+                  <Badge variant={status.variant}>{status.label}</Badge>
                 </div>
-
-                {driver && (
-                  <div className="text-xs text-slate-600 bg-slate-50 rounded p-4">
-                    Chauffeur actuel : <strong>{driver.name}</strong> · {formatCFA(driver.dailyRate)}/jour
-                  </div>
-                )}
 
                 <div className="grid grid-cols-3 p-4">
                   <div>
                     <div className="text-xs text-slate-400 mt-1">Revenus</div>
-                    <div className="font-financial text-sm font-semibold text-emerald-600">{formatCFA(v.totalRevenue)}</div>
+                    <div className="font-financial text-sm font-semibold text-emerald-600">{formatCFA(revenus)}</div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-400 mt-1">Dépenses</div>
-                    <div className="font-financial text-sm font-semibold text-red-600">{formatCFA(totalExpenses)}</div>
+                    <div className="font-financial text-sm font-semibold text-red-600">{formatCFA(depenses)}</div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-400 mt-1">Résultat</div>
@@ -163,20 +159,6 @@ export default function VTC() {
                       {result >= 0 ? '+' : ''}{formatCFA(result)}
                     </div>
                   </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-2 border-t border-slate-100 p-4">
-                  {[
-                    { label: 'Carburant', value: v.fuelCost },
-                    { label: 'Entretien', value: v.maintenanceCost },
-                    { label: 'Réparations', value: v.repairCost },
-                    { label: 'Assurance', value: v.insuranceCost },
-                  ].map(item => (
-                    <div key={item.label}>
-                      <div className="text-xs text-slate-400">{item.label}</div>
-                      <div className="font-financial text-xs text-slate-600">{formatCFA(item.value)}</div>
-                    </div>
-                  ))}
                 </div>
 
                 <div className="text-xs text-slate-500 p-4 group-hover:text-slate-700 transition-colors">Voir la fiche →</div>
@@ -188,89 +170,42 @@ export default function VTC() {
 
       {tab === 'chauffeurs' && (
         <div className="space-y-4">
-          {/* Versements du jour */}
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-            <div className="text-sm font-semibold text-amber-900 mb-2">Versements attendus aujourd&apos;hui</div>
-            <div className="flex gap-4">
-              {drivers.filter(d => d.status === 'active' && d.workedDays[recentDays[recentDays.length - 1]]).map(d => {
-                const todayPaid = d.payments.some(p => p.date === recentDays[recentDays.length - 1]);
-                return (
-                  <div key={d.id} className={`flex items-center gap-2 rounded-lg px-4 py-2 ${todayPaid ? 'bg-emerald-100' : 'bg-white border border-amber-300'}`}>
-                    <div className={`w-2 h-2 rounded-full ${todayPaid ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                    <span className="text-sm font-medium text-slate-800">{d.name}</span>
-                    <span className="font-financial text-sm text-slate-700">{formatCFA(d.dailyRate)}</span>
-                    <Badge variant={todayPaid ? 'success' : 'warning'}>{todayPaid ? 'Reçu' : 'Attendu'}</Badge>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Driver cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {drivers.length === 0 && (
+              <div className="text-sm text-slate-400 text-center py-8 md:col-span-2 lg:col-span-3">Aucun chauffeur enregistré.</div>
+            )}
             {drivers.map(driver => {
-              const vehicle = vehicles.find(v => v.id === driver.vehicleId);
-              const workedCount = Object.values(driver.workedDays).filter(Boolean).length;
-              const totalPaid = driver.payments.reduce((s, p) => s + p.amount, 0);
-              const expectedTotal = workedCount * driver.dailyRate;
-              const pendingAmount = expectedTotal - totalPaid;
-
+              const activeAssignment = affectations.find(a => a.driver_id === driver.id);
+              const status = chauffeurStatusLabel[driver.status];
               return (
                 <button
                   key={driver.id}
-                  onClick={() => setSelectedDriver(driver)}
+                  onClick={() => openDriver(driver)}
                   className="text-left bg-white rounded-xl border border-slate-200 p-6 hover:border-navy-300 hover:shadow-sm transition-all group"
                 >
                   <div className="flex items-start justify-between p-4">
                     <div>
-                      <div className="font-semibold text-slate-800">{driver.name}</div>
-                      <div className="text-xs text-slate-500 mt-1">{driver.phone}</div>
+                      <div className="font-semibold text-slate-800">{driver.full_name}</div>
+                      <div className="text-xs text-slate-500 mt-1">{driver.phone ?? 'Téléphone non renseigné'}</div>
                     </div>
-                    <Badge variant={driver.status === 'active' ? 'success' : 'neutral'}>
-                      {driver.status === 'active' ? 'Actif' : 'Inactif'}
-                    </Badge>
+                    <Badge variant={status.variant}>{status.label}</Badge>
                   </div>
 
-                  {vehicle && (
-                    <div className="text-xs text-slate-600 p-4">Véhicule : <strong>{vehicle.name}</strong></div>
+                  {activeAssignment && (
+                    <div className="text-xs text-slate-600 p-4">
+                      Véhicule : <strong>{activeAssignment.vehicle_registration ?? '—'}</strong>
+                    </div>
                   )}
 
-                  {/* 7-day grid */}
-                  <div className="p-4">
-                    <div className="text-xs text-slate-400 p-2">7 derniers jours</div>
-                    <div className="flex gap-1">
-                      {recentDays.map(day => {
-                        const worked = driver.workedDays[day];
-                        const paid = driver.payments.some(p => p.date === day);
-                        return (
-                          <div key={day} className="flex-1">
-                            <div className={`h-6 rounded-sm text-xs flex items-center justify-center font-medium ${
-                              !worked ? 'bg-slate-100 text-slate-400' :
-                              paid ? 'bg-emerald-100 text-emerald-700' :
-                              'bg-amber-100 text-amber-700'
-                            }`}>
-                              {worked ? (paid ? '✓' : '!') : '–'}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="flex gap-1 mt-1">
-                      {recentDays.map(day => (
-                        <div key={day} className="flex-1 text-xs text-slate-400 text-center">{dayLabels[day].split(' ')[0]}</div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 p-4">
+                  <div className="grid grid-cols-2 p-4 border-t border-slate-100">
                     <div>
-                      <div className="text-xs text-slate-400">Jours travaillés</div>
-                      <div className="font-financial text-sm font-semibold text-slate-800">{workedCount} j</div>
+                      <div className="text-xs text-slate-400">Attendu</div>
+                      <div className="font-financial text-sm font-semibold text-slate-800">{formatCFA(activeAssignment?.expected_amount ?? 0)}</div>
                     </div>
                     <div>
                       <div className="text-xs text-slate-400">En attente</div>
-                      <div className={`font-financial text-sm font-semibold ${pendingAmount > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        {formatCFA(pendingAmount)}
+                      <div className={`font-financial text-sm font-semibold ${(activeAssignment?.remaining_amount ?? 0) > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {formatCFA(activeAssignment?.remaining_amount ?? 0)}
                       </div>
                     </div>
                   </div>
@@ -285,167 +220,119 @@ export default function VTC() {
       <Modal
         open={!!selectedVehicle}
         onClose={() => setSelectedVehicle(null)}
-        title={selectedVehicle?.name ?? ''}
+        title={selectedVehicle ? `${selectedVehicle.make} ${selectedVehicle.model}` : ''}
         width="lg"
       >
-        {selectedVehicle && (() => {
-          const v = selectedVehicle;
-          const totalExpenses = v.fuelCost + v.maintenanceCost + v.repairCost + v.insuranceCost;
-          const result = v.totalRevenue - totalExpenses;
-          const driver = drivers.find(d => d.id === v.currentDriverId);
-
-          return (
-            <div className="p-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div><div className="text-xs text-slate-500 mt-1">Immatriculation</div><div className="font-mono font-semibold text-slate-800">{v.plate}</div></div>
-                <div><div className="text-xs text-slate-500 mt-1">Année</div><div className="text-slate-700">{v.year}</div></div>
-                <div><div className="text-xs text-slate-500 mt-1">Prix d&apos;acquisition</div><div className="font-financial font-semibold text-slate-800">{formatCFA(v.acquisitionCost)}</div></div>
-                <div><div className="text-xs text-slate-500 mt-1">Frais initiaux</div><div className="font-financial text-slate-700">{formatCFA(v.initialExpenses)}</div></div>
-              </div>
-
-              {driver && (
-                <div className="bg-slate-50 rounded-lg p-4">
-                  <div className="text-xs text-slate-500 mb-1">Chauffeur actuel</div>
-                  <div className="font-medium text-slate-800">{driver.name} · {driver.phone}</div>
-                  <div className="text-xs text-slate-500 mt-1">{formatCFA(driver.dailyRate)}/jour</div>
-                </div>
-              )}
-
-              <div>
-                <div className="text-sm font-semibold text-slate-700 p-4">Bilan financier cumulé</div>
-                <div className="grid grid-cols-3 gap-4 bg-slate-50 rounded-lg p-4 text-center">
-                  <div>
-                    <div className="text-xs text-slate-500 mb-1">Revenus totaux</div>
-                    <div className="font-financial text-lg font-bold text-emerald-600">{formatCFA(v.totalRevenue)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-500 mb-1">Dépenses cumulées</div>
-                    <div className="font-financial text-lg font-bold text-red-600">{formatCFA(totalExpenses)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-500 mb-1">Résultat net</div>
-                    <div className={`font-financial text-lg font-bold ${result >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {result >= 0 ? '+' : ''}{formatCFA(result)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm font-semibold text-slate-700 p-4">Détail des dépenses</div>
-                <div className="space-y-2">
-                  {[
-                    { label: 'Carburant', value: v.fuelCost, pct: (v.fuelCost / totalExpenses) * 100, color: 'bg-red-400' },
-                    { label: 'Entretien', value: v.maintenanceCost, pct: (v.maintenanceCost / totalExpenses) * 100, color: 'bg-orange-400' },
-                    { label: 'Réparations', value: v.repairCost, pct: (v.repairCost / totalExpenses) * 100, color: 'bg-amber-400' },
-                    { label: 'Assurance', value: v.insuranceCost, pct: (v.insuranceCost / totalExpenses) * 100, color: 'bg-yellow-400' },
-                  ].map(item => (
-                    <div key={item.label}>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-slate-600">{item.label}</span>
-                        <span className="font-financial font-medium text-slate-800">{formatCFA(item.value)}</span>
-                      </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div className={`h-full ${item.color} rounded-full`} style={{ width: `${item.pct}%` }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+        {selectedVehicle && (
+          <div className="p-6 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div><div className="text-xs text-slate-500 mt-1">Immatriculation</div><div className="font-mono font-semibold text-slate-800">{selectedVehicle.registration}</div></div>
+              <div><div className="text-xs text-slate-500 mt-1">Année</div><div className="text-slate-700">{selectedVehicle.year ?? '—'}</div></div>
+              <div><div className="text-xs text-slate-500 mt-1">Prix d&apos;acquisition</div><div className="font-financial font-semibold text-slate-800">{formatCFA(selectedVehicle.acquisition_cost)}</div></div>
+              <div><div className="text-xs text-slate-500 mt-1">Statut</div><div className="text-slate-700">{vehiculeStatusLabel[selectedVehicle.status].label}</div></div>
             </div>
-          );
-        })()}
+
+            {statsLoading ? (
+              <div className="text-sm text-slate-400 text-center py-4">Chargement du bilan…</div>
+            ) : vehicleStats ? (
+              <>
+                <div>
+                  <div className="text-sm font-semibold text-slate-700 p-4">Bilan financier cumulé</div>
+                  <div className="grid grid-cols-3 gap-4 bg-slate-50 rounded-lg p-4 text-center">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Revenus totaux</div>
+                      <div className="font-financial text-lg font-bold text-emerald-600">{formatCFA(vehicleStats.versements)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Dépenses cumulées</div>
+                      <div className="font-financial text-lg font-bold text-red-600">{formatCFA(vehicleStats.depenses)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">Résultat net</div>
+                      <div className={`font-financial text-lg font-bold ${vehicleStats.rentabilite >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {vehicleStats.rentabilite >= 0 ? '+' : ''}{formatCFA(vehicleStats.rentabilite)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm font-semibold text-slate-700 p-4">Détail des dépenses</div>
+                  {Object.keys(vehicleStats.depenses_par_type).length === 0 ? (
+                    <div className="text-sm text-slate-400 text-center py-4">Aucune dépense enregistrée.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {Object.entries(vehicleStats.depenses_par_type).map(([type, amount]) => (
+                        <div key={type} className="flex justify-between text-sm border-b border-slate-100 py-2">
+                          <span className="text-slate-600">{typeDepenseLabel[type] ?? type}</span>
+                          <span className="font-financial font-medium text-slate-800">{formatCFA(amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-slate-400 text-center py-4">Bilan indisponible.</div>
+            )}
+          </div>
+        )}
       </Modal>
 
       {/* Driver detail modal */}
       <Modal
         open={!!selectedDriver}
         onClose={() => setSelectedDriver(null)}
-        title={selectedDriver?.name ?? ''}
+        title={selectedDriver?.full_name ?? ''}
         width="md"
       >
-        {selectedDriver && (() => {
-          const d = selectedDriver;
-          const vehicle = vehicles.find(v => v.id === d.vehicleId);
-          const workedCount = Object.values(d.workedDays).filter(Boolean).length;
-          const totalPaid = d.payments.reduce((s, p) => s + p.amount, 0);
-          const expectedTotal = workedCount * d.dailyRate;
-
-          return (
-            <div className="p-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div><div className="text-xs text-slate-500 mt-1">Téléphone</div><div className="text-slate-700">{d.phone}</div></div>
-                <div><div className="text-xs text-slate-500 mt-1">Taux journalier</div><div className="font-financial font-semibold text-slate-800">{formatCFA(d.dailyRate)}</div></div>
-              </div>
-              {vehicle && (
-                <div><div className="text-xs text-slate-500 mt-1">Véhicule</div><div className="text-slate-700">{vehicle.name} · {vehicle.plate}</div></div>
-              )}
-
-              <div className="bg-slate-50 rounded-lg p-4">
-                <div className="text-xs font-semibold text-slate-600 p-4">7 derniers jours</div>
-                <div className="grid grid-cols-7 gap-1">
-                  {recentDays.map(day => {
-                    const worked = d.workedDays[day];
-                    const paid = d.payments.some(p => p.date === day);
-                    return (
-                      <div key={day} className="text-center">
-                        <div className={`h-10 rounded flex items-center justify-center text-xs font-medium mb-1 ${
-                          !worked ? 'bg-slate-100 text-slate-400' :
-                          paid ? 'bg-emerald-100 text-emerald-700' :
-                          'bg-amber-100 text-amber-700'
-                        }`}>
-                          {worked ? (paid ? '✓' : '!') : '—'}
-                        </div>
-                        <div className="text-xs text-slate-400 leading-tight">{dayLabels[day]}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="flex p-4 text-xs text-slate-500">
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-sm" /> Travaillé + versé</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-amber-400 rounded-sm" /> Travaillé, non versé</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 bg-slate-100 rounded-sm" /> Non travaillé</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Jours travaillés</div>
-                  <div className="font-financial text-xl font-bold text-slate-800">{workedCount}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Total versé</div>
-                  <div className="font-financial text-xl font-bold text-emerald-600">{formatCFA(totalPaid)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">En attente</div>
-                  <div className={`font-financial text-xl font-bold ${expectedTotal - totalPaid > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                    {formatCFA(expectedTotal - totalPaid)}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm font-semibold text-slate-700 p-4">Versements récents</div>
-                {d.payments.length === 0 ? (
-                  <div className="text-sm text-slate-400 text-center py-4">Aucun versement</div>
-                ) : (
-                  <div className="space-y-2">
-                    {d.payments.slice(0, 5).map(p => (
-                      <div key={p.id} className="flex justify-between items-center py-2 border-b border-slate-100">
-                        <div>
-                          <div className="text-sm text-slate-700">{p.date}</div>
-                          {p.note && <div className="text-xs text-slate-400">{p.note}</div>}
-                        </div>
-                        <div className="font-financial font-semibold text-emerald-600">{formatCFA(p.amount)}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+        {selectedDriver && (
+          <div className="p-6 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div><div className="text-xs text-slate-500 mt-1">Téléphone</div><div className="text-slate-700">{selectedDriver.phone ?? '—'}</div></div>
+              <div><div className="text-xs text-slate-500 mt-1">Permis</div><div className="text-slate-700">{selectedDriver.license_number ?? '—'}</div></div>
             </div>
-          );
-        })()}
+
+            {driverLoading ? (
+              <div className="text-sm text-slate-400 text-center py-4">Chargement…</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-4 text-center bg-slate-50 rounded-lg p-4">
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">Attendu</div>
+                    <div className="font-financial text-lg font-bold text-slate-800">{formatCFA(driverPaiement?.total_expected ?? 0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">Total versé</div>
+                    <div className="font-financial text-lg font-bold text-emerald-600">{formatCFA(driverPaiement?.total_paid ?? 0)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">En attente</div>
+                    <div className={`font-financial text-lg font-bold ${(driverPaiement?.total_remaining ?? 0) > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {formatCFA(driverPaiement?.total_remaining ?? 0)}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm font-semibold text-slate-700 p-4">Versements récents</div>
+                  {driverVersements.length === 0 ? (
+                    <div className="text-sm text-slate-400 text-center py-4">Aucun versement</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {driverVersements.slice(0, 5).map(v => (
+                        <div key={v.id} className="flex justify-between items-center py-2 border-b border-slate-100">
+                          <div className="text-sm text-slate-700">{new Date(v.paid_at).toLocaleDateString('fr-FR')}</div>
+                          <div className="font-financial font-semibold text-emerald-600">{formatCFA(v.amount)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

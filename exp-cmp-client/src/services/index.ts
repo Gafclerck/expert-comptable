@@ -12,5 +12,6 @@ export * from './ledger';
 export * from './dashboard';
 export * from './insurance';
 export * from './poultry';
+export * from './vtc';
 export * from './audit';
 export * from './assistant';
