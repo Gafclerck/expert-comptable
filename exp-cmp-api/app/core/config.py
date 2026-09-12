@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     ASSISTANTV2_REDIS_URL: str = "redis://localhost:6379/0"
     ASSISTANTV2_MAX_ITERATIONS: int = 4
 
+    # Canal Telegram (long polling) : front-end de l'assistant v2. Inactif par
+    # defaut ; le worker sort proprement tant que TELEGRAM_ENABLED est false
+    # ou que TELEGRAM_BOT_TOKEN est vide (voir docs/TELEGRAM_INTEGRATION.md).
+    TELEGRAM_ENABLED: bool = False
+    TELEGRAM_BOT_TOKEN: str | None = None
+    TELEGRAM_LINK_TOKEN_TTL_MINUTES: int = 10
+    TELEGRAM_POLL_TIMEOUT_SECONDS: int = 30
+
     @model_validator(mode="after")
     def check_production_safety(self):
         if self.ENVIRONMENT == "production":
