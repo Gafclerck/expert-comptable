@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { fetchPersons } from '@/services';
+import { fetchPersons, createPerson, updatePerson } from '@/services';
 import { useApiQuery } from '@/hooks/useApiQuery';
+import { useAuth } from '@/contexts/AuthContext';
 import type { PersonOut, PersonStatus } from '@/types/api';
 import Badge from '@/components/ui/Badge';
 import Modal from '@/components/ui/Modal';
@@ -40,11 +41,49 @@ function PersonCard({ person, onClick }: { person: PersonOut; onClick: () => voi
   );
 }
 
+type PersonFormMode = 'create' | 'edit';
+
 export default function Personnes() {
+  const { isRoot } = useAuth();
   const [selected, setSelected] = useState<PersonOut | null>(null);
   const [filterStatus, setFilterStatus] = useState<PersonStatus | 'all'>('all');
 
-  const { data: rawPeople, loading } = useApiQuery<PersonOut[]>(() => fetchPersons(), []);
+  const { data: rawPeople, loading, refetch } = useApiQuery<PersonOut[]>(() => fetchPersons(), []);
+
+  // Formulaire créer/modifier
+  const [formOpen, setFormOpen] = useState(false);
+  const [formMode, setFormMode] = useState<PersonFormMode>('create');
+  const [pName, setPName] = useState('');
+  const [pPhone, setPPhone] = useState('');
+  const [pStatus, setPStatus] = useState<PersonStatus>('active');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  function openCreate() {
+    setFormMode('create'); setPName(''); setPPhone(''); setPStatus('active'); setFormError(null); setFormOpen(true);
+  }
+
+  function openEdit(person: PersonOut) {
+    setFormMode('edit'); setPName(person.full_name); setPPhone(person.phone ?? ''); setPStatus(person.status); setFormError(null); setFormOpen(true);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pName.trim()) { setFormError('Le nom est requis.'); return; }
+    setSubmitting(true); setFormError(null);
+    try {
+      if (formMode === 'create') {
+        await createPerson({ full_name: pName.trim(), phone: pPhone.trim() || null });
+      } else if (selected) {
+        await updatePerson(selected.id, { full_name: pName.trim(), phone: pPhone.trim() || null, status: pStatus });
+      }
+      setFormOpen(false); refetch();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Erreur lors de l\'enregistrement.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   if (loading) return <div className="p-6 text-center text-slate-400 text-sm">Chargement…</div>;
 
@@ -99,6 +138,11 @@ export default function Personnes() {
             {r.label}
           </button>
         ))}
+        {isRoot && (
+          <button onClick={openCreate} className="ml-auto p-2 rounded-full font-display text-xs font-medium bg-navy-800 text-white border border-navy-800 hover:bg-navy-700 transition-all">
+            + Nouvelle personne
+          </button>
+        )}
       </div>
 
       {/* Grid */}
@@ -140,8 +184,44 @@ export default function Personnes() {
                 <div className="text-slate-800 font-medium">{new Date(selected.created_at).toLocaleDateString('fr-FR')}</div>
               </div>
             </div>
+
+            {isRoot && (
+              <div className="flex justify-end border-t border-slate-100 pt-4">
+                <button onClick={() => openEdit(selected)} className="px-4 py-2 text-sm bg-navy-800 text-white rounded-lg hover:bg-navy-700 transition-colors">
+                  Modifier la personne
+                </button>
+              </div>
+            )}
           </div>
         )}
+      </Modal>
+
+      {/* Form créer / modifier personne */}
+      <Modal open={formOpen} onClose={() => !submitting && setFormOpen(false)} title={formMode === 'create' ? 'Nouvelle personne' : 'Modifier la personne'} width="md">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-slate-500 block p-2">Nom complet *</label>
+            <input required value={pName} onChange={e => setPName(e.target.value)} className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500 block p-2">Téléphone</label>
+            <input value={pPhone} onChange={e => setPPhone(e.target.value)} className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+          </div>
+          {formMode === 'edit' && (
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Statut</label>
+              <select value={pStatus} onChange={e => setPStatus(e.target.value as PersonStatus)} className="w-full border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-700 outline-none focus:border-navy-400 bg-white">
+                <option value="active">Actif</option>
+                <option value="inactive">Inactif</option>
+              </select>
+            </div>
+          )}
+          {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2">{formError}</p>}
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" onClick={() => setFormOpen(false)} disabled={submitting} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Annuler</button>
+            <button type="submit" disabled={submitting} className="px-4 py-2 text-sm bg-navy-800 text-white rounded-lg hover:bg-navy-700 disabled:opacity-50">{submitting ? (formMode === 'create' ? 'Création…' : 'Enregistrement…') : (formMode === 'create' ? 'Créer' : 'Enregistrer')}</button>
+          </div>
+        </form>
       </Modal>
     </div>
   );
