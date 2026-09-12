@@ -11,6 +11,87 @@ import type {
   StatistiquesVehiculeOut, VehiculeOut, VehiculeStatus, VersementOut,
 } from '../types/api';
 
+// ─── Payloads ─────────────────────────────────────────────────
+
+export interface ChauffeurCreatePayload {
+  full_name: string;
+  phone?: string | null;
+  license_number?: string | null;
+}
+
+export interface ChauffeurUpdateStatusPayload {
+  status: ChauffeurStatus;
+}
+
+export interface VehiculeCreatePayload {
+  make: string;
+  model: string;
+  year?: number | null;
+  registration: string;
+  acquisition_cost?: number;
+}
+
+export interface VehiculeUpdatePayload {
+  make?: string;
+  model?: string;
+  year?: number | null;
+  registration?: string;
+  acquisition_cost?: number;
+}
+
+export interface VehiculeUpdateStatusPayload {
+  status: VehiculeStatus;
+}
+
+export interface AffectationCreatePayload {
+  driver_id: string;
+  vehicle_id: string;
+  start_date: string;
+  end_date?: string | null;
+  expected_amount: number;
+  terms?: string | null;
+}
+
+export interface AffectationEndPayload {
+  end_date?: string | null;
+}
+
+export interface VersementCreatePayload {
+  driver_id: string;
+  vehicle_id: string;
+  amount: number;
+  account_id: string;
+  category_id: string;
+  occurred_at?: string | null;
+}
+
+export type DepenseExpenseType =
+  | 'fuel' | 'maintenance' | 'repair' | 'tires'
+  | 'insurance' | 'registration' | 'misc';
+
+export interface DepenseCreatePayload {
+  vehicle_id: string;
+  expense_type: DepenseExpenseType;
+  amount: number;
+  quantity?: number | null;
+  unit?: string | null;
+  description?: string | null;
+  account_id: string;
+  category_id: string;
+  occurred_at?: string | null;
+}
+
+export interface IndisponibiliteCreatePayload {
+  vehicle_id: string;
+  start_date: string;
+  end_date?: string | null;
+  reason?: string | null;
+}
+
+export interface IndisponibiliteEndPayload {
+  end_date?: string | null;
+}
+
 // ─── Chauffeurs ───────────────────────────────────────────────
 
 export async function fetchVtcChauffeurs(status?: ChauffeurStatus): Promise<ChauffeurOut[]> {
@@ -78,4 +159,60 @@ export async function fetchVtcResumeFinancier(start?: string, end?: string): Pro
   if (end) params.set('end', end);
   const query = params.toString();
   return api.get<ResumeFinancierOut>(`/vtc/resume-financier${query ? `?${query}` : ''}`);
+}
+
+// ─── Écritures — Chauffeurs ───────────────────────────────────
+
+export async function createVtcChauffeur(payload: ChauffeurCreatePayload): Promise<ChauffeurOut> {
+  return api.post<ChauffeurOut>('/vtc/chauffeurs', payload);
+}
+
+export async function updateVtcChauffeurStatus(chauffeurId: string, payload: ChauffeurUpdateStatusPayload): Promise<ChauffeurOut> {
+  return api.patch<ChauffeurOut>(`/vtc/chauffeurs/${chauffeurId}/status`, payload);
+}
+
+// ─── Écritures — Véhicules ────────────────────────────────────
+
+export async function createVtcVehicule(payload: VehiculeCreatePayload): Promise<VehiculeOut> {
+  return api.post<VehiculeOut>('/vtc/vehicules', payload);
+}
+
+export async function updateVtcVehicule(vehiculeId: string, payload: VehiculeUpdatePayload): Promise<VehiculeOut> {
+  return api.patch<VehiculeOut>(`/vtc/vehicules/${vehiculeId}`, payload);
+}
+
+export async function updateVtcVehiculeStatus(vehiculeId: string, payload: VehiculeUpdateStatusPayload): Promise<VehiculeOut> {
+  return api.patch<VehiculeOut>(`/vtc/vehicules/${vehiculeId}/status`, payload);
+}
+
+// ─── Écritures — Affectations ─────────────────────────────────
+
+export async function createVtcAffectation(payload: AffectationCreatePayload): Promise<AffectationOut> {
+  return api.post<AffectationOut>('/vtc/affectations', payload);
+}
+
+export async function endVtcAffectation(affectationId: string, payload: AffectationEndPayload = {}): Promise<AffectationOut> {
+  return api.patch<AffectationOut>(`/vtc/affectations/${affectationId}/end`, payload);
+}
+
+// ─── Écritures — Versements ───────────────────────────────────
+
+export async function createVtcVersement(payload: VersementCreatePayload): Promise<VersementOut> {
+  return api.post<VersementOut>('/vtc/versements', payload);
+}
+
+// ─── Écritures — Dépenses ─────────────────────────────────────
+
+export async function createVtcDepense(payload: DepenseCreatePayload): Promise<DepenseOut> {
+  return api.post<DepenseOut>('/vtc/depenses', payload);
+}
+
+// ─── Écritures — Indisponibilités ─────────────────────────────
+
+export async function createVtcIndisponibilite(payload: IndisponibiliteCreatePayload): Promise<unknown> {
+  return api.post('/vtc/indisponibilites', payload);
+}
+
+export async function closeVtcIndisponibilite(indispoId: string, payload: IndisponibiliteEndPayload = {}): Promise<unknown> {
+  return api.patch(`/vtc/indisponibilites/${indispoId}/close`, payload);
 }
