@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
+import type { FormEvent } from 'react';
 import { formatCFA } from '@/utils/format';
-import { fetchAccounts, fetchCategories } from '@/services';
+import { createTransfer, fetchAccounts, fetchCategories } from '@/services';
 import { getCachedBusinesses } from '@/services/identity';
 import { useApiQuery } from '@/hooks/useApiQuery';
 import { useTransactions } from '@/hooks/useTransactions';
@@ -142,18 +143,72 @@ export default function Transactions() {
     }
   }
 
+  // ─── Nouveau transfert entre caisses ─────────────────────────
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [tFrom, setTFrom] = useState('');
+  const [tTo, setTTo] = useState('');
+  const [tAmount, setTAmount] = useState('');
+  const [tReference, setTReference] = useState('');
+  const [tOccurredAt, setTOccurredAt] = useState(toLocalInputValue());
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
+
+  const accountOptions = accounts.filter(a => a.active);
+  const accountLabelFull = (id: string) => {
+    const name = accountLabel.get(id) ?? '—';
+    const acc = accounts.find(a => a.id === id);
+    const biz = acc ? businessLabel.get(acc.business_id) : null;
+    return biz ? `${name} · ${biz}` : name;
+  };
+
+  function openTransfer() {
+    const first = accountOptions[0];
+    const second = accountOptions.find(a => a.id !== first?.id) ?? first;
+    setTFrom(first?.id ?? ''); setTTo(second?.id ?? '');
+    setTAmount(''); setTReference(''); setTOccurredAt(toLocalInputValue());
+    setTransferError(null); setTransferOpen(true);
+  }
+
+  async function handleTransferSubmit(e: FormEvent) {
+    e.preventDefault();
+    const amount = Number(tAmount);
+    if (!tFrom || !tTo || tFrom === tTo || !Number.isFinite(amount) || amount <= 0) {
+      setTransferError('Choisissez deux comptes différents et un montant supérieur à 0.');
+      return;
+    }
+    setTransferSubmitting(true); setTransferError(null);
+    try {
+      await createTransfer({
+        source_account_id: tFrom,
+        destination_account_id: tTo,
+        amount,
+        occurred_at: tOccurredAt ? new Date(tOccurredAt).toISOString() : undefined,
+        reference: tReference.trim() || null,
+      });
+      setTransferOpen(false); refetch();
+    } catch (err) { setTransferError(err instanceof Error ? err.message : 'Erreur.'); setTransferSubmitting(false); }
+  }
+
   return (
     <div className="p-6 max-w-screen-xl mx-auto">
 
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-2 pb-4">
         <h1 className="text-xl font-semibold text-slate-800">Transactions</h1>
-        <button
-          onClick={openForm}
-          className="bg-navy-600 hover:bg-navy-700 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
-        >
-          Nouvelle écriture
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={openTransfer}
+            className="bg-white border border-slate-200 hover:border-slate-300 text-slate-700 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+          >
+            Nouveau transfert
+          </button>
+          <button
+            onClick={openForm}
+            className="bg-navy-600 hover:bg-navy-700 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+          >
+            Nouvelle écriture
+          </button>
+        </div>
       </div>
 
       {/* Summary row */}
@@ -514,6 +569,51 @@ export default function Transactions() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Nouveau transfert */}
+      <Modal open={transferOpen} onClose={() => !transferSubmitting && setTransferOpen(false)} title="Nouveau transfert entre caisses" width="md">
+        <form onSubmit={handleTransferSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Compte source *</label>
+              <select value={tFrom} onChange={e => setTFrom(e.target.value)} className="w-full border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-700 outline-none focus:border-navy-400 bg-white">
+                {accountOptions.map(a => (
+                  <option key={a.id} value={a.id}>{accountLabelFull(a.id)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Compte destination *</label>
+              <select value={tTo} onChange={e => setTTo(e.target.value)} className="w-full border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-700 outline-none focus:border-navy-400 bg-white">
+                {accountOptions.filter(a => a.id !== tFrom).map(a => (
+                  <option key={a.id} value={a.id}>{accountLabelFull(a.id)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Montant (FCFA) *</label>
+              <input required type="number" min={1} step="0.01" value={tAmount} onChange={e => setTAmount(e.target.value)} placeholder="0" className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Date</label>
+              <input type="datetime-local" value={tOccurredAt} onChange={e => setTOccurredAt(e.target.value)} className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500 block p-2">Référence</label>
+            <input type="text" value={tReference} onChange={e => setTReference(e.target.value)} placeholder="Ex : virement Wave vers Caisse" className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+          </div>
+          {transferError && (
+            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2">{transferError}</p>
+          )}
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" onClick={() => setTransferOpen(false)} disabled={transferSubmitting} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Annuler</button>
+            <button type="submit" disabled={transferSubmitting} className="px-4 py-2 text-sm bg-navy-800 text-white rounded-lg hover:bg-navy-700 disabled:opacity-50">{transferSubmitting ? 'Transfert…' : 'Transférer'}</button>
+          </div>
+        </form>
       </Modal>
     </div>
   );
