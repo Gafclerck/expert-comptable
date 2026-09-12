@@ -437,7 +437,7 @@ export default function VTC() {
     <div className="p-6 max-w-screen-xl mx-auto space-y-6">
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 p-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Revenus (versements)" value={totals.versements} color="text-emerald-600" />
         <StatCard label="Dépenses" value={totals.depenses} color="text-red-600" />
         <StatCard label="Résultat net" value={totals.net} color={totals.net >= 0 ? 'text-emerald-600' : 'text-red-600'} />
@@ -493,7 +493,7 @@ export default function VTC() {
                   <Badge variant={status.variant}>{status.label}</Badge>
                 </div>
 
-                <div className="grid grid-cols-3 p-4">
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <div className="text-xs text-slate-400 mt-1">Revenus</div>
                     <div className="font-financial text-sm font-semibold text-emerald-600">{formatCFA(revenus)}</div>
@@ -545,7 +545,7 @@ export default function VTC() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 p-4 border-t border-slate-100">
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-100">
                   <div>
                     <div className="text-xs text-slate-400">Attendu</div>
                     <div className="font-financial text-sm font-semibold text-slate-800">{formatCFA(activeAssignment?.expected_amount ?? 0)}</div>

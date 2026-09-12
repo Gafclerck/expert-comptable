@@ -179,7 +179,7 @@ export default function Assurance() {
     <div className="p-6 max-w-screen-xl mx-auto space-y-6">
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 p-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: "Primes émises", value: kpis.premium, color: 'text-emerald-600', isCount: false },
           { label: 'Encaissé', value: kpis.collected, color: 'text-emerald-600', isCount: false },

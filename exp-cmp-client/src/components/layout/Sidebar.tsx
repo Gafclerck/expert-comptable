@@ -12,12 +12,11 @@ const navItems: NavItem[] = [
   { id: 'transactions', label: 'Transactions', icon: 'arrows', path: '/transactions', group: 'finances' },
   { id: 'comptes', label: 'Comptes & caisses', icon: 'wallet', path: '/comptes', group: 'finances' },
   { id: 'personnes', label: 'Personnes', icon: 'users', path: '/personnes', group: 'controle' },
-  { id: 'assistant', label: 'Assistant IA', icon: 'sparkles', path: '/assistant', group: 'suivi' },
   { id: 'utilisateurs', label: 'Utilisateurs', icon: 'user-plus', path: '/utilisateurs', group: 'admin' },
   { id: 'audit', label: 'Audit', icon: 'list', path: '/audit', group: 'admin' },
   { id: 'parametres', label: 'Paramètres', icon: 'settings', path: '/parametres', group: 'admin' },
 ];
-const groups = [['principal', ''], ['activites', 'Activités'], ['finances', 'Finances'], ['controle', 'Contrôle'], ['suivi', 'Suivi'], ['admin', 'Administration']] as const;
+const groups = [['principal', ''], ['activites', 'Activités'], ['finances', 'Finances'], ['controle', 'Contrôle'], ['admin', 'Administration']] as const;
 interface SidebarProps { collapsed?: boolean; onToggleCollapse?: () => void; userName?: string; userRole?: string; }
 
 function initials(name: string) { const parts = name.trim().split(/\s+/).filter(Boolean); return (parts[0]?.[0] ?? 'E') + (parts[1]?.[0] ?? 'C'); }

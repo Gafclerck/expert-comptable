@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
@@ -17,6 +17,9 @@ export default function AppLayout() {
   const { profile } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const isAssistant = pathname.startsWith('/assistant');
 
   return (
     <PeriodProvider>
@@ -46,6 +49,18 @@ export default function AppLayout() {
             <Outlet />
           </main>
         </div>
+
+        {/* Accès permanent à l'Assistant IA — visible depuis toutes les pages */}
+        <button
+          onClick={() => navigate('/assistant')}
+          title="Ouvrir l'Assistant IA"
+          className={`fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full bg-gradient-to-r from-[var(--color-primary)] to-navy-700 px-5 py-3 text-sm font-semibold text-white shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition-all hover:-translate-y-0.5 hover:shadow-[0_10px_40px_var(--color-primary-glow)] ${
+            isAssistant ? 'pointer-events-none scale-0 opacity-0' : ''
+          }`}
+        >
+          <Icon name="sparkles" size={18} />
+          Assistant IA
+        </button>
       </div>
     </PeriodProvider>
   );

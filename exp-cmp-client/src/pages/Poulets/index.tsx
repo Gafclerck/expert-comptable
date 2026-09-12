@@ -137,7 +137,7 @@ export default function Poulets() {
       )}
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 p-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: "Chiffre d'affaires", value: kpis.revenue, color: 'text-emerald-600' },
           { label: 'Dépenses (achats)', value: kpis.expenses, color: 'text-red-600' },
@@ -214,7 +214,7 @@ export default function Poulets() {
                   </Badge>
                 </div>
 
-                <div className="grid grid-cols-3 p-4">
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <div className="text-xs text-slate-400 mt-1">Coût total</div>
                     <div className="font-financial text-sm font-semibold text-slate-800">{formatCFA(cost)}</div>
