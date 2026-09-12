@@ -13,5 +13,6 @@ import app.modules.audit.models  # noqa: F401
 import app.modules.insurance.models  # noqa: F401
 import app.modules.poultry.models  # noqa: F401
 import app.modules.vtc.models  # noqa: F401
+import app.modules.assistantv2.telegram.models  # noqa: F401
 
 __all__ = ["Base"]
