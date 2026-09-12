@@ -30,6 +30,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    ports:
+      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -58,6 +60,29 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  # Canal Telegram (assistant v2) : worker de polling dedie, partageant le
+  # MEME env que le backend (parite stricte DATABASE_URL / REDIS / token via
+  # l'ancre x-backend-env + env_file). Un seul replica : deux workers se
+  # battraient sur getUpdates (409) et sur l'offset Redis.
+  telegram-bot:
+    image: exp-cmp-backend
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+    env_file:
+      - ./exp-cmp-api/.env
+    environment:
+      <<: *backend-env
+      TELEGRAM_ENABLED: "true"
+    command: python -m app.modules.assistantv2.telegram
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
 
   frontend:
     build:
