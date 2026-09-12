@@ -1,8 +1,13 @@
 import { useState, useEffect } from 'react';
+import type { FormEvent } from 'react';
 import { formatCFA } from '@/utils/format';
-import { fetchAccountsForDashboard } from '@/services';
+import { createAccount, fetchAccountsForDashboard } from '@/services';
 import type { AccountRow } from '@/services';
+import { getCachedBusinesses } from '@/services/identity';
+import type { AccountType } from '@/types/api';
 import { useApiQuery } from '@/hooks/useApiQuery';
+import { useAuth } from '@/contexts/AuthContext';
+import Modal from '@/components/ui/Modal';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
 const accountIcons: Record<string, string> = {
@@ -15,9 +20,55 @@ const accountIcons: Record<string, string> = {
 const ACCOUNT_COLORS = ['var(--color-primary)', 'var(--color-success)', 'var(--color-warning)', 'var(--color-primary)'];
 
 export default function Comptes() {
-  const { data: accountsData, loading } = useApiQuery<AccountRow[]>(fetchAccountsForDashboard, []);
+  const { data: accountsData, loading, refetch } = useApiQuery<AccountRow[]>(fetchAccountsForDashboard, []);
   const accounts = accountsData ?? [];
   const totalBalance = accounts.reduce((s, a) => s + a.balance, 0);
+
+  const { isRoot } = useAuth();
+  const businesses = getCachedBusinesses();
+
+  // ── Form Nouveau compte (RequireRoot) ────────────────────────
+  const [accountFormOpen, setAccountFormOpen] = useState(false);
+  const [aBusiness, setABusiness] = useState('');
+  const [aName, setAName] = useState('');
+  const [aType, setAType] = useState<AccountType>('cash');
+  const [aCurrency, setACurrency] = useState('FCFA');
+  const [aOpening, setAOpening] = useState('');
+  const [accountSubmitting, setAccountSubmitting] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+
+  const ACCOUNT_TYPE_OPTIONS: Array<{ id: AccountType; label: string }> = [
+    { id: 'cash', label: 'Caisse' },
+    { id: 'bank', label: 'Banque' },
+    { id: 'mobile_money', label: 'Mobile Money' },
+    { id: 'other', label: 'Autre' },
+  ];
+
+  function openAccountForm() {
+    setABusiness(businesses[0]?.id ?? '');
+    setAName(''); setAType('cash'); setACurrency('FCFA'); setAOpening('');
+    setAccountError(null); setAccountFormOpen(true);
+  }
+
+  async function handleAccountSubmit(e: FormEvent) {
+    e.preventDefault();
+    const opening = Number(aOpening) || 0;
+    if (!aBusiness || !aName.trim() || !Number.isFinite(opening) || opening < 0) {
+      setAccountError("Remplissez le nom, l'activité et un solde initial valide.");
+      return;
+    }
+    setAccountSubmitting(true); setAccountError(null);
+    try {
+      await createAccount({
+        business_id: aBusiness,
+        name: aName.trim(),
+        type: aType,
+        currency: aCurrency.trim() || 'FCFA',
+        opening_balance: opening,
+      });
+      setAccountFormOpen(false); refetch();
+    } catch (err) { setAccountError(err instanceof Error ? err.message : 'Erreur.'); setAccountSubmitting(false); }
+  }
 
   const [activeAccount, setActiveAccount] = useState<string | null>(null);
 
@@ -36,6 +87,19 @@ export default function Comptes() {
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto space-y-6">
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 pt-2 pb-2">
+        <h1 className="text-xl font-semibold text-slate-800">Comptes</h1>
+        {isRoot && (
+          <button
+            onClick={openAccountForm}
+            className="bg-navy-600 hover:bg-navy-700 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+          >
+            Nouveau compte
+          </button>
+        )}
+      </div>
 
       {/* Total */}
       <div className="bg-white rounded-xl border border-slate-200 p-6">
@@ -175,6 +239,43 @@ export default function Comptes() {
           </div>
         </div>
       )}
+
+      {/* Form Nouveau compte */}
+      <Modal open={accountFormOpen} onClose={() => !accountSubmitting && setAccountFormOpen(false)} title="Nouveau compte" width="md">
+        <form onSubmit={handleAccountSubmit} className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-slate-500 block p-2">Activité *</label>
+            <select value={aBusiness} onChange={e => setABusiness(e.target.value)} className="w-full border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-700 outline-none focus:border-navy-400 bg-white">
+              {businesses.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500 block p-2">Nom du compte *</label>
+            <input required value={aName} onChange={e => setAName(e.target.value)} placeholder="Caisse Principale, Compte Wave…" className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Type *</label>
+              <select value={aType} onChange={e => setAType(e.target.value as AccountType)} className="w-full border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-700 outline-none focus:border-navy-400 bg-white">
+                {ACCOUNT_TYPE_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Devise</label>
+              <input value={aCurrency} onChange={e => setACurrency(e.target.value)} className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500 block p-2">Solde initial (FCFA)</label>
+            <input type="number" min={0} step="0.01" value={aOpening} onChange={e => setAOpening(e.target.value)} placeholder="0" className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+          </div>
+          {accountError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2">{accountError}</p>}
+          <div className="flex gap-2 justify-end pt-2">
+            <button type="button" onClick={() => setAccountFormOpen(false)} disabled={accountSubmitting} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Annuler</button>
+            <button type="submit" disabled={accountSubmitting} className="px-4 py-2 text-sm bg-navy-800 text-white rounded-lg hover:bg-navy-700 disabled:opacity-50">{accountSubmitting ? 'Création…' : 'Créer'}</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
