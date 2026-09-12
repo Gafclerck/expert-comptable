@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { fetchUsers, createUser } from '@/services';
+import { fetchUsers, createUser, updateUser, deactivateUser } from '@/services';
 import { useApiQuery } from '@/hooks/useApiQuery';
+import { useAuth } from '@/contexts/AuthContext';
 import type { UserOut } from '@/types/api';
 import Modal from '@/components/ui/Modal';
 
@@ -14,6 +15,7 @@ const roles = [
 ];
 
 export default function Utilisateurs() {
+  const { user: me } = useAuth();
   const { data: rawUsers, loading, refetch } = useApiQuery<UserOut[]>(fetchUsers, []);
   const [showCreate, setShowCreate] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -23,6 +25,21 @@ export default function Utilisateurs() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isRoot, setIsRoot] = useState(false);
+
+  // ── Modification ─────────────────────────────────────────────
+  const [editTarget, setEditTarget] = useState<UserOut | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [editStatus, setEditStatus] = useState<'active' | 'inactive'>('active');
+  const [editRoot, setEditRoot] = useState(false);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // ── Désactivation ───────────────────────────────────────────
+  const [deactivateTarget, setDeactivateTarget] = useState<UserOut | null>(null);
+  const [deactivating, setDeactivating] = useState(false);
+
+  const [menuUserId, setMenuUserId] = useState<string | null>(null);
 
   const users = rawUsers ?? [];
 
@@ -41,6 +58,49 @@ export default function Utilisateurs() {
       setSubmitting(false);
     }
   };
+
+  function openEdit(target: UserOut) {
+    setEditTarget(target);
+    setEditEmail(target.email);
+    setEditPassword('');
+    setEditStatus(target.status);
+    setEditRoot(target.roles.includes('root'));
+    setEditError(null);
+    setMenuUserId(null);
+  }
+
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    setEditSubmitting(true); setEditError(null);
+    try {
+      const payload: { email?: string; password?: string; status?: 'active' | 'inactive'; is_root?: boolean } = {};
+      if (editEmail !== editTarget.email) payload.email = editEmail;
+      if (editPassword) payload.password = editPassword;
+      if (editStatus !== editTarget.status) payload.status = editStatus;
+      if (editRoot !== editTarget.roles.includes('root')) payload.is_root = editRoot;
+      await updateUser(editTarget.id, payload);
+      setEditTarget(null); refetch();
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Erreur lors de la modification');
+    } finally {
+      setEditSubmitting(false);
+    }
+  }
+
+  async function handleDeactivate() {
+    if (!deactivateTarget) return;
+    setDeactivating(true);
+    try {
+      await deactivateUser(deactivateTarget.id);
+      setDeactivateTarget(null); setMenuUserId(null); refetch();
+    } catch (err) {
+      setDeactivateTarget(null);
+      setFormError(err instanceof Error ? err.message : 'Erreur lors de la désactivation');
+    } finally {
+      setDeactivating(false);
+    }
+  }
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto space-y-6">
@@ -75,6 +135,7 @@ export default function Utilisateurs() {
               <th className="text-left p-6 text-xs font-semibold text-slate-500 uppercase tracking-wide">Rôle(s)</th>
               <th className="text-left p-6 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Statut</th>
               <th className="text-left p-6 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Dernière connexion</th>
+              <th className="text-right p-6 text-xs font-semibold text-slate-500 uppercase tracking-wide">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -111,6 +172,24 @@ export default function Utilisateurs() {
                 </td>
                 <td className="p-6 text-slate-400 text-xs hidden lg:table-cell">
                   {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString('fr-FR') : 'Jamais'}
+                </td>
+                <td className="p-6 text-right relative">
+                  <button
+                    onClick={() => setMenuUserId(menuUserId === user.id ? null : user.id)}
+                    className="text-slate-500 hover:text-slate-800 px-2 text-lg leading-none"
+                    title="Actions"
+                  >⋯</button>
+                  {menuUserId === user.id && (
+                    <>
+                      <button className="fixed inset-0 z-40 cursor-default" aria-label="Fermer" onClick={() => setMenuUserId(null)} />
+                      <div className="absolute right-4 top-12 z-50 bg-white rounded-lg border border-slate-200 shadow-lg w-44 overflow-hidden">
+                        <button onClick={() => openEdit(user)} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">Modifier</button>
+                        {user.status === 'active' && user.id !== me?.id && (
+                          <button onClick={() => { setDeactivateTarget(user); setMenuUserId(null); }} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50">Désactiver</button>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
@@ -181,6 +260,56 @@ export default function Utilisateurs() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit user modal */}
+      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Modifier l'utilisateur" width="md">
+        {editTarget && (
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Email</label>
+              <input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-500 block p-2">Nouveau mot de passe (laisser vide pour conserver)</label>
+              <input type="password" minLength={8} value={editPassword} onChange={e => setEditPassword(e.target.value)} className="border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-800 w-full outline-none focus:border-navy-400" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-medium text-slate-500 block p-2">Statut</label>
+                <select value={editStatus} onChange={e => setEditStatus(e.target.value as 'active' | 'inactive')} className="w-full border border-slate-200 rounded-lg px-4 py-2 text-sm text-slate-700 outline-none focus:border-navy-400 bg-white">
+                  <option value="active">Actif</option>
+                  <option value="inactive">Inactif</option>
+                </select>
+              </div>
+              <div />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+              <input type="checkbox" checked={editRoot} onChange={e => setEditRoot(e.target.checked)} />
+              Compte administrateur (root)
+            </label>
+
+            {editError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-4 py-2">{editError}</p>}
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button type="button" onClick={() => setEditTarget(null)} disabled={editSubmitting} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50">Annuler</button>
+              <button type="submit" disabled={editSubmitting} className="px-4 py-2 text-sm bg-navy-800 text-white rounded-lg hover:bg-navy-700 transition-colors disabled:opacity-50">{editSubmitting ? 'Enregistrement…' : 'Enregistrer'}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Deactivate confirm modal */}
+      <Modal open={!!deactivateTarget} onClose={() => setDeactivateTarget(null)} title="Désactiver l'utilisateur" width="sm">
+        {deactivateTarget && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-700">Désactiver l'utilisateur <strong>{deactivateTarget.person_full_name ?? deactivateTarget.email}</strong> ? Il ne pourra plus se connecter.</p>
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => setDeactivateTarget(null)} disabled={deactivating} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Annuler</button>
+              <button type="button" onClick={handleDeactivate} disabled={deactivating} className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-500 disabled:opacity-50">{deactivating ? 'Désactivation…' : 'Désactiver'}</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
