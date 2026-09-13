@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.events import publish
-from app.modules.assistantv2 import parsing, registry, resolvers, session_store
+from app.modules.assistantv2 import declarations, parsing, registry, resolvers, session_store
 from app.modules.assistantv2.formulator import get_formulator
 from app.modules.assistantv2.plan import Plan, PlanStatus, PlanStep, StepStatus
 from app.modules.assistantv2.schemas import AssistantReplyV2
@@ -100,6 +100,10 @@ def _run_loop(db: Session, actor, plan: Plan) -> AssistantReplyV2:
 
         tool_calls = message_out.get("tool_calls") or []
         if not tool_calls:
+            if not plan.steps:
+                fallback_reply = _fallback_intent_reply(db, actor, plan)
+                if fallback_reply is not None:
+                    return fallback_reply
             return _finalize(plan)
 
         messages.append({"role": "assistant", "content": message_out.get("content"), "tool_calls": tool_calls})
@@ -236,7 +240,7 @@ def _is_present_and_valid(field: str, value) -> bool:
         return False
     if field == "quantity":
         return isinstance(value, int) and value > 0
-    if field in ("amount", "premium", "expected_amount"):
+    if field in ("amount", "premium", "expected_amount", "acquisition_cost"):
         return isinstance(value, Decimal) and value > 0
     return True
 
@@ -310,7 +314,7 @@ def _fill_field(db: Session, actor, step: PlanStep, field: str, message: str, ch
             return False
         params["matricule"] = m
         return True
-    if field in ("premium", "amount", "expected_amount"):
+    if field in ("premium", "amount", "expected_amount", "acquisition_cost"):
         amount = parsing.parse_amount(message)
         if amount is None and field == "amount" and params.get("contract_id"):
             norm = parsing.normalize(message)
@@ -381,7 +385,23 @@ def _fill_field(db: Session, actor, step: PlanStep, field: str, message: str, ch
             params["affectation_id"] = choices[index]["id"]
             return True
         return False
-    return False
+    if field == "indisponibilite":
+        index = _choose_index(message, choices)
+        if index is not None:
+            params["indisponibilite_id"] = choices[index]["id"]
+            return True
+        return False
+    if field == "status":
+        norm = parsing.normalize(message).strip(".,;!? ")
+        if not norm or norm in _CANCEL:
+            return False
+        params["status"] = norm
+        return True
+    text = message.strip(".,;!? ")
+    if not text:
+        return False
+    params[field] = text
+    return True
 
 
 def _choose_index(message: str, items: list[dict]) -> int | None:
@@ -444,6 +464,7 @@ _PARAM_LABELS = {
     "driver_name": "chauffeur",
     "vehicle_label": "vehicule",
     "expected_amount": "montant attendu",
+    "acquisition_cost": "prix d'achat",
     "expense_type": "type de depense",
     "start_date": "date de debut",
     "end_date": "date de fin",
@@ -492,6 +513,42 @@ def _execute_step(db: Session, actor, plan: Plan, index: int, spec) -> bool:
         new_values={"operation": step.tool, "params": {k: str(v) for k, v in step.params.items()}},
     )
     return True
+
+
+def _fallback_intent_reply(db: Session, actor, plan: Plan) -> AssistantReplyV2 | None:
+    """Filet de securite quand le LLM n'a propose aucun outil.
+
+    Si la phrase annonce clairement une declaration (ex. « nouvelle voiture »),
+    on injecte le step correspondant avec zero parametre : la boucle standard
+    clarifie ensuite champ par champ (marque, modele, immatriculation, prix...).
+    Si rien ne matche (ou l'outil est inconnu), retourne None : l'appelant
+    reprend le comportement par defaut (message « je n'ai pas compris »)."""
+    tool = declarations.detect_declaration(plan.user_message)
+    if not tool:
+        return None
+    spec = registry.get(tool)
+    if spec is None:
+        return None
+
+    plan.steps.append(PlanStep(tool=tool, params={}))
+    index = len(plan.steps) - 1
+
+    if not _prepare_step(db, actor, plan, index):
+        if plan.status != PlanStatus.AWAITING_CLARIFICATION:
+            return _finalize(plan)
+        session_store.save_plan(plan)
+        return _ask_clarification_reply(plan)
+
+    if spec.is_critical and not plan.steps[index].params.get("_confirmed"):
+        plan.status = PlanStatus.AWAITING_CONFIRMATION
+        plan.pending_step_index = index
+        session_store.save_plan(plan)
+        return _ask_confirmation_reply(plan, spec)
+
+    if not _execute_step(db, actor, plan, index, spec):
+        session_store.save_plan(plan)
+        return _ask_clarification_reply(plan)
+    return _finalize(plan)
 
 
 def _finalize(plan: Plan) -> AssistantReplyV2:
@@ -567,6 +624,10 @@ def _build_system_prompt(db: Session) -> str:
         "renvoyer plusieurs appels d'outils dans la meme reponse si la demande le requiert "
         "(par exemple plusieurs questions posees dans le meme message). N'invente jamais une "
         "valeur : omets un parametre si tu ne le connais pas avec certitude plutot que de "
-        "deviner, le systeme demandera une precision a l'utilisateur si besoin. Si la demande "
-        "ne correspond a aucun outil, n'appelle aucun outil."
+        "deviner, le systeme demandera une precision a l'utilisateur si besoin. "
+        "Si l'utilisateur annonce simplement une intention d'enregistrement sans les details "
+        "(ex. \"nouvelle voiture\", \"je veux enregistrer un vehicule\"), appelle quand meme "
+        "l'outil correspondant avec les parametres manquants absents : le systeme demandera "
+        "chaque information manquante. "
+        "Si la demande ne correspond a aucun outil, n'appelle aucun outil."
     )

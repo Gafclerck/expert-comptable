@@ -124,6 +124,15 @@ def test_creation_vehicule_et_liste(client, root):
     assert rows[0]["id"] == body["id"]
 
 
+def test_creation_vehicule_sans_prix_refusee(client, root):
+    r = client.post(
+        "/api/vtc/vehicules",
+        headers=auth_headers(root),
+        json={"make": "Kia", "model": "Sportage", "year": 2013, "registration": "KO-000-ZZ"},
+    )
+    assert r.status_code == 422
+
+
 def test_create_affectation_et_versements(client, db, vtc_business, co_owner, root):
     ch, veh, af = _chauffeur_vehicule_affectation(client, db, co_owner, vtc_business)
     account = create_account(client, root, vtc_business, name="Caisse VTC")

@@ -51,7 +51,7 @@ class VehiculeCreate(BaseModel):
     model: str = Field(..., min_length=1, max_length=100)
     year: int | None = None
     registration: str = Field(..., min_length=1, max_length=50)
-    acquisition_cost: Decimal = Field(Decimal("0"), ge=0)
+    acquisition_cost: Decimal = Field(..., ge=0, description="Prix d'achat en FCFA (obligatoire)")
 
 
 class VehiculeOut(BaseModel):
@@ -76,6 +76,13 @@ class VehiculeUpdate(BaseModel):
 
 class VehiculeUpdateStatus(BaseModel):
     status: VehiculeStatusLiteral
+
+
+class AcquisitionCreate(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+    account_id: uuid.UUID
+    category_id: uuid.UUID
+    occurred_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

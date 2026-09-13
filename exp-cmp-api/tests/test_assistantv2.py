@@ -372,15 +372,65 @@ def _seed_vtc_chauffeur_vehicule(db, root, name="Moussa Fall", registration="DK-
 def test_vtc_create_chauffeur_et_vehicule_via_llm(db, root, vtc, llm):
     llm["queue"].append(_tool_call_message([
         ("create_chauffeur", {"driver": "Moussa Fall", "phone": "771234567"}),
-        ("create_vehicule", {"make": "Toyota", "model": "Corolla", "registration": "DK-1234-AB"}),
+        ("create_vehicule", {"make": "Toyota", "model": "Corolla", "registration": "DK-1234-AB", "acquisition_cost": "1500000"}),
     ]))
     llm["queue"].append(_no_tool_message())
 
-    reply = assistantv2_service.chat(db, root, "Nouveau chauffeur Moussa Fall et nouveau vehicule Toyota Corolla DK-1234-AB", None)
+    reply = assistantv2_service.chat(db, root, "Nouveau chauffeur Moussa Fall et nouveau vehicule Toyota Corolla DK-1234-AB a 1 500 000", None)
 
     assert set(reply.executed_tools) == {"create_chauffeur", "create_vehicule"}
     assert "Moussa Fall" in reply.text
     assert "DK-1234-AB" in reply.text
+
+
+def test_vtc_create_vehicule_sans_prix_demande_clarification(db, root, vtc, llm):
+    llm["queue"].append(_tool_call_message([
+        ("create_vehicule", {"make": "Toyota", "model": "Corolla", "registration": "DK-1234-AB"})
+    ]))
+
+    reply = assistantv2_service.chat(db, root, "nouvelle voiture Toyota Corolla immatriculation DK-1234-AB", None)
+    assert reply.clarification is True
+    assert reply.missing_field == "acquisition_cost"
+
+    reply2 = assistantv2_service.chat(db, root, "1 500 000", reply.session_id)
+    assert reply2.executed_tools == ["create_vehicule"]
+    assert "1 500 000" in reply2.text
+
+
+def test_vtc_nouvelle_voiture_declenche_clarification(db, root, vtc, llm):
+    """Intention nue sans tool_call du LLM : le fallback deterministe injecte
+    create_vehicule et l'orchestrateur clarifie champ par champ."""
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "nouvelle voiture", None)
+    assert reply.clarification is True
+    assert reply.missing_field == "make"
+
+    reply2 = assistantv2_service.chat(db, root, "Toyota", reply.session_id)
+    assert reply2.clarification is True
+    assert reply2.missing_field == "model"
+
+    reply3 = assistantv2_service.chat(db, root, "Corolla", reply2.session_id)
+    assert reply3.clarification is True
+    assert reply3.missing_field == "registration"
+
+    reply4 = assistantv2_service.chat(db, root, "DK-1234-AB", reply3.session_id)
+    assert reply4.clarification is True
+    assert reply4.missing_field == "acquisition_cost"
+
+    reply5 = assistantv2_service.chat(db, root, "1 500 000", reply4.session_id)
+    assert reply5.executed_tools == ["create_vehicule"]
+    assert "1 500 000" in reply5.text
+
+
+def test_vtc_nouvelle_voiture_sans_declaration_reste_muet(db, root, vtc, llm):
+    """Pas de signal de declaration (liste, pas de creation) : le fallback ne
+    doit pas se declencher, retour au message par defaut."""
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "montre moi les nouvelles voitures du parc", None)
+    assert reply.clarification is False
+    assert reply.executed_tools == []
 
 
 def test_vtc_list_chauffeurs_vide(db, root, vtc, llm):
@@ -484,3 +534,96 @@ def test_vtc_resume_financier_direct(db, root, vtc):
     assert "20 000" in text
     assert facts["kind"] == "get_resume_financier"
     assert facts["net"].endswith("FCFA")
+
+
+def test_vtc_update_vehicule_status_avec_confirmation(db, root, vtc, llm):
+    _seed_vtc_chauffeur_vehicule(db, root)
+    llm["queue"].append(_tool_call_message([
+        ("update_vehicule_status", {"vehicle": "DK-1234-AB", "status": "en panne"})
+    ]))
+
+    reply = assistantv2_service.chat(db, root, "Mettre le vehicule DK-1234-AB en panne", None)
+    assert reply.confirmation_required is True
+    assert reply.pending_action == "update_vehicule_status"
+
+    reply2 = assistantv2_service.chat(db, root, "oui", reply.session_id)
+    assert reply2.executed_tools == ["update_vehicule_status"]
+    assert "out_of_service" in reply2.text
+
+
+def test_vtc_update_chauffeur_status_avec_confirmation(db, root, vtc, llm):
+    _seed_vtc_chauffeur_vehicule(db, root)
+    llm["queue"].append(_tool_call_message([
+        ("update_chauffeur_status", {"driver": "Moussa Fall", "status": "inactif"})
+    ]))
+
+    reply = assistantv2_service.chat(db, root, "Desactiver le chauffeur Moussa Fall", None)
+    assert reply.confirmation_required is True
+
+    reply2 = assistantv2_service.chat(db, root, "oui", reply.session_id)
+    assert reply2.executed_tools == ["update_chauffeur_status"]
+    assert "inactive" in reply2.text
+
+
+def test_vtc_close_indisponibilite(db, root, vtc, llm):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    vtc_service.create_indisponibilite(db, root, vehicle_id=vehicule.id, start_date=date.today(), reason="Panne moteur")
+    llm["queue"].append(_tool_call_message([
+        ("close_indisponibilite", {"vehicle": "DK-1234-AB"})
+    ]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "DK-1234-AB est reparable, fin de l'indisponibilite", None)
+    assert reply.executed_tools == ["close_indisponibilite"]
+    assert "cloturee" in reply.text.lower()
+
+
+def test_vtc_list_versements_via_llm(db, root, vtc, llm):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    vtc_service.create_affectation(db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id, start_date=date.today(), expected_amount=Decimal("50000"))
+    account = ledger_service.list_accounts(db, root, vtc.id)[0]
+    category = next(c for c in ledger_service.list_categories(db) if c.type == CategoryType.CREDIT)
+    vtc_service.create_versement(db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id, amount=Decimal("20000"), account_id=account.id, category_id=category.id)
+
+    llm["queue"].append(_tool_call_message([("list_versements", {})]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Lister les versements du parc", None)
+    assert reply.executed_tools == ["list_versements"]
+    assert "20 000" in reply.text
+
+
+def test_vtc_get_vehicle_stats_avec_periode(db, root, vtc):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    vtc_service.create_affectation(db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id, start_date=date.today(), expected_amount=Decimal("50000"))
+    account = ledger_service.list_accounts(db, root, vtc.id)[0]
+    category = next(c for c in ledger_service.list_categories(db) if c.type == CategoryType.CREDIT)
+    vtc_service.create_versement(db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id, amount=Decimal("20000"), account_id=account.id, category_id=category.id)
+
+    params = {"vehicle_id": str(vehicule.id), "vehicle_label": "Toyota Corolla (DK-1234-AB)", "period": "ce mois"}
+    facts, target_id, text = vtc_tools.get_vehicle_stats(db, root, params)
+    assert facts["kind"] == "get_vehicle_stats"
+    assert facts["period"] == "ce mois"
+    assert "20 000" in text
+
+
+def test_vtc_park_overview_direct(db, root, vtc):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    vtc_service.create_affectation(db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id, start_date=date.today(), expected_amount=Decimal("50000"))
+
+    facts, target_id, text = vtc_tools.park_overview(db, root, {})
+    assert target_id is None
+    assert facts["kind"] == "park_overview"
+    assert facts["chauffeurs_actifs"] == "1"
+    assert "reste" in text.lower()
+
+
+def test_vtc_active_affectations_via_llm(db, root, vtc, llm):
+    chauffeur, vehicule = _seed_vtc_chauffeur_vehicule(db, root)
+    vtc_service.create_affectation(db, root, driver_id=chauffeur.id, vehicle_id=vehicule.id, start_date=date.today(), expected_amount=Decimal("50000"))
+    llm["queue"].append(_tool_call_message([("active_affectations", {})]))
+    llm["queue"].append(_no_tool_message())
+
+    reply = assistantv2_service.chat(db, root, "Quelles affectations sont actives aujourd'hui ?", None)
+    assert reply.executed_tools == ["active_affectations"]
+    assert "Moussa Fall" in reply.text

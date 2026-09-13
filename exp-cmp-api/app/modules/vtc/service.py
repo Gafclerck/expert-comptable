@@ -263,6 +263,73 @@ def update_vehicule_status(
 
 
 # ---------------------------------------------------------------------------
+# Acquisition vehicule
+# ---------------------------------------------------------------------------
+
+
+def enregistrer_acquisition(
+    db: Session,
+    actor,
+    *,
+    vehicule_id: uuid.UUID,
+    amount: Decimal,
+    account_id: uuid.UUID,
+    category_id: uuid.UUID,
+    occurred_at: datetime | None = None,
+) -> Vehicule:
+    """Lane la sortie de tresorerie reelle de l'acquisition au grand livre
+    (`acquisition_transaction_id`). Reference financiere : la rentabilite
+    courante reste derivee des versements/depenses, hors acquisition (voir
+    ER_DIAGRAM §VTC)."""
+    business = _vtc_business(db)
+    _ensure_vtc_access(db, actor, business)
+    vehicule = get_vehicule(db, actor, vehicule_id)
+
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Le montant de l'acquisition doit etre positif")
+    if vehicule.acquisition_transaction_id is not None:
+        raise HTTPException(status_code=400, detail="Une acquisition est deja enregistree pour ce vehicule")
+
+    amount = amount.quantize(Decimal("0.01"))
+    transaction = record_expense(
+        db,
+        actor,
+        business_id=business.id,
+        account_id=account_id,
+        amount=amount,
+        description=f"Acquisition {vehicule.make} {vehicule.model} ({vehicule.registration})",
+        occurred_at=occurred_at,
+        category_id=category_id,
+        commit=False,
+    )
+    vehicule.acquisition_transaction_id = transaction.id
+    db.commit()
+    db.refresh(vehicule)
+
+    publish(
+        "ledger.transaction.posted",
+        actor_id=str(actor.id),
+        entity_id=str(transaction.id),
+        new_values={
+            "business_id": str(business.id),
+            "account_id": str(account_id),
+            "type": "expense",
+            "amount": str(amount),
+        },
+    )
+    publish(
+        "vtc.vehicule.updated",
+        actor_id=str(actor.id),
+        entity_id=str(vehicule.id),
+        new_values={
+            "acquisition_transaction_id": str(transaction.id),
+            "acquisition_amount": str(amount),
+        },
+    )
+    return vehicule
+
+
+# ---------------------------------------------------------------------------
 # Affectation
 # ---------------------------------------------------------------------------
 
@@ -354,16 +421,21 @@ def _sum_versements(db: Session, assignment_id: uuid.UUID) -> Decimal:
     )
 
 
-def to_affectation_out(db: Session, af: Affectation) -> dict:
-    vehicle = db.get(Vehicule, af.vehicle_id)
-    chauffeur = db.get(Chauffeur, af.driver_id)
-    person = get_person_summary(db, chauffeur.person_id) if chauffeur else None
-    paid = _sum_versements(db, af.id)
+def _affectation_dict(db: Session, af: Affectation, *, paid: Decimal,
+                      vehicle: Vehicule | None = None,
+                      chauffeur: Chauffeur | None = None,
+                      person_name: str | None = None) -> dict:
+    if vehicle is None:
+        vehicle = db.get(Vehicule, af.vehicle_id)
+    if chauffeur is None:
+        chauffeur = db.get(Chauffeur, af.driver_id)
+    if person_name is None and chauffeur is not None:
+        person_name = get_person_summary(db, chauffeur.person_id).full_name
     return {
         "id": af.id,
         "driver_id": af.driver_id,
         "vehicle_id": af.vehicle_id,
-        "driver_name": person.full_name if person else None,
+        "driver_name": person_name,
         "vehicle_registration": vehicle.registration if vehicle else None,
         "start_date": af.start_date.isoformat(),
         "end_date": af.end_date.isoformat() if af.end_date else None,
@@ -374,6 +446,10 @@ def to_affectation_out(db: Session, af: Affectation) -> dict:
         "status": af.status.value,
         "created_at": af.created_at,
     }
+
+
+def to_affectation_out(db: Session, af: Affectation) -> dict:
+    return _affectation_dict(db, af, paid=_sum_versements(db, af.id))
 
 
 def list_affectations(
@@ -394,7 +470,41 @@ def list_affectations(
     if status is not None:
         q = q.filter(Affectation.status == status)
     q = q.order_by(Affectation.start_date.desc())
-    return [to_affectation_out(db, af) for af in q.all()]
+    affectations = q.all()
+    if not affectations:
+        return []
+
+    ids = [a.id for a in affectations]
+    paid_by_assignment = dict(
+        db.query(VersementChauffeur.assignment_id, func.coalesce(func.sum(VersementChauffeur.amount), Decimal("0")))
+        .filter(VersementChauffeur.assignment_id.in_(ids))
+        .group_by(VersementChauffeur.assignment_id)
+        .all()
+    )
+    vehicles = {
+        v.id: v
+        for v in db.query(Vehicule).filter(Vehicule.id.in_({a.vehicle_id for a in affectations})).all()
+    }
+    chauffeurs = {
+        c.id: c
+        for c in db.query(Chauffeur).filter(Chauffeur.id.in_({a.driver_id for a in affectations})).all()
+    }
+    person_names: dict[uuid.UUID, str] = {}
+    rows = []
+    for af in affectations:
+        chauffeur = chauffeurs.get(af.driver_id)
+        person_id = chauffeur.person_id if chauffeur else None
+        if person_id is not None and person_id not in person_names:
+            person_names[person_id] = get_person_summary(db, person_id).full_name
+        rows.append(_affectation_dict(
+            db,
+            af,
+            paid=paid_by_assignment.get(af.id, Decimal("0")),
+            vehicle=vehicles.get(af.vehicle_id),
+            chauffeur=chauffeur,
+            person_name=person_names.get(person_id) if person_id else None,
+        ))
+    return rows
 
 
 def get_affectation(db: Session, user, affectation_id: uuid.UUID) -> dict:
@@ -499,13 +609,15 @@ def create_versement(
         raise HTTPException(status_code=400, detail="Le montant du versement doit etre positif")
 
     amount = amount.quantize(Decimal("0.01"))
+    person = get_person_summary(db, chauffeur.person_id)
+    description = f"Versement {person.full_name} ({vehicule.registration})"
     transaction = record_revenue(
         db,
         actor,
         business_id=business.id,
         account_id=account_id,
         amount=amount,
-        description=f"Versement chauffeur {chauffeur.id}",
+        description=description,
         occurred_at=occurred_at,
         category_id=category_id,
         commit=False,
@@ -610,6 +722,7 @@ def create_depense(
     amount = amount.quantize(Decimal("0.01"))
     effective_occurred = occurred_at or datetime.now(timezone.utc)
     desc = description or _DEPENSE_DESCRIPTIONS.get(expense_type, "Depense vehicule")
+    desc = f"{desc} ({vehicule.registration})"
     if expense_type == TypeDepenseVehicule.FUEL and quantity is not None:
         desc = f"{desc} ({quantity} {unit or 'l'})"
 
@@ -789,31 +902,39 @@ def list_indisponibilites(
 # ---------------------------------------------------------------------------
 
 
-def _sum_versements_vehicule(db: Session, vehicle_id: uuid.UUID) -> Decimal:
-    return (
-        db.query(func.coalesce(func.sum(VersementChauffeur.amount), Decimal("0")))
-        .filter(VersementChauffeur.vehicle_id == vehicle_id)
-        .scalar()
-        or Decimal("0")
+def _day_bounds(d: date, is_start: bool) -> datetime:
+    if is_start:
+        return datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+    return datetime.combine(d, datetime.max.time(), tzinfo=timezone.utc)
+
+
+def _sum_versements_vehicule(db: Session, vehicle_id: uuid.UUID, *, start: date | None = None, end: date | None = None) -> Decimal:
+    q = db.query(func.coalesce(func.sum(VersementChauffeur.amount), Decimal("0"))).filter(VersementChauffeur.vehicle_id == vehicle_id)
+    if start is not None:
+        q = q.filter(VersementChauffeur.paid_at >= _day_bounds(start, True))
+    if end is not None:
+        q = q.filter(VersementChauffeur.paid_at <= _day_bounds(end, False))
+    return q.scalar() or Decimal("0")
+
+
+def _sum_depenses_vehicule(db: Session, vehicle_id: uuid.UUID, *, start: date | None = None, end: date | None = None) -> Decimal:
+    q = db.query(func.coalesce(func.sum(DepenseVehicule.amount), Decimal("0"))).filter(DepenseVehicule.vehicle_id == vehicle_id)
+    if start is not None:
+        q = q.filter(DepenseVehicule.occurred_at >= _day_bounds(start, True))
+    if end is not None:
+        q = q.filter(DepenseVehicule.occurred_at <= _day_bounds(end, False))
+    return q.scalar() or Decimal("0")
+
+
+def _depenses_vehicule_par_type(db: Session, vehicle_id: uuid.UUID, *, start: date | None = None, end: date | None = None) -> dict[str, Decimal]:
+    q = db.query(DepenseVehicule.expense_type, func.coalesce(func.sum(DepenseVehicule.amount), Decimal("0"))).filter(
+        DepenseVehicule.vehicle_id == vehicle_id
     )
-
-
-def _sum_depenses_vehicule(db: Session, vehicle_id: uuid.UUID) -> Decimal:
-    return (
-        db.query(func.coalesce(func.sum(DepenseVehicule.amount), Decimal("0")))
-        .filter(DepenseVehicule.vehicle_id == vehicle_id)
-        .scalar()
-        or Decimal("0")
-    )
-
-
-def _depenses_vehicule_par_type(db: Session, vehicle_id: uuid.UUID) -> dict[str, Decimal]:
-    rows = (
-        db.query(DepenseVehicule.expense_type, func.coalesce(func.sum(DepenseVehicule.amount), Decimal("0")))
-        .filter(DepenseVehicule.vehicle_id == vehicle_id)
-        .group_by(DepenseVehicule.expense_type)
-        .all()
-    )
+    if start is not None:
+        q = q.filter(DepenseVehicule.occurred_at >= _day_bounds(start, True))
+    if end is not None:
+        q = q.filter(DepenseVehicule.occurred_at <= _day_bounds(end, False))
+    rows = q.group_by(DepenseVehicule.expense_type).all()
     return {t.value: total for t, total in rows}
 
 
@@ -862,11 +983,18 @@ def statut_paiement_chauffeur(db: Session, user, driver_id: uuid.UUID) -> dict:
     }
 
 
-def statistiques_vehicule(db: Session, user, vehicule_id: uuid.UUID) -> dict:
+def statistiques_vehicule(
+    db: Session,
+    user,
+    vehicule_id: uuid.UUID,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> dict:
     vehicule = get_vehicule(db, user, vehicule_id)
-    verses = _sum_versements_vehicule(db, vehicule.id)
-    depenses = _sum_depenses_vehicule(db, vehicule.id)
-    par_type = _depenses_vehicule_par_type(db, vehicule.id)
+    verses = _sum_versements_vehicule(db, vehicule.id, start=start, end=end)
+    depenses = _sum_depenses_vehicule(db, vehicule.id, start=start, end=end)
+    par_type = _depenses_vehicule_par_type(db, vehicule.id, start=start, end=end)
 
     return {
         "vehicle_id": vehicule.id,
@@ -901,19 +1029,14 @@ def resume_financier(
             "counts": {"vehicules_actifs": 0, "chauffeurs_actifs": 0, "affectations_actives": 0},
         }
 
-    def _date_to_dt(d: date, is_start: bool) -> datetime:
-        if is_start:
-            return datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
-        return datetime.combine(d, datetime.max.time(), tzinfo=timezone.utc)
-
     q_verse = db.query(VersementChauffeur).filter(VersementChauffeur.vehicle_id.in_(vehicle_ids))
     q_depense = db.query(DepenseVehicule).filter(DepenseVehicule.vehicle_id.in_(vehicle_ids))
     if start is not None:
-        q_verse = q_verse.filter(VersementChauffeur.paid_at >= _date_to_dt(start, True))
-        q_depense = q_depense.filter(DepenseVehicule.occurred_at >= _date_to_dt(start, True))
+        q_verse = q_verse.filter(VersementChauffeur.paid_at >= _day_bounds(start, True))
+        q_depense = q_depense.filter(DepenseVehicule.occurred_at >= _day_bounds(start, True))
     if end is not None:
-        q_verse = q_verse.filter(VersementChauffeur.paid_at <= _date_to_dt(end, False))
-        q_depense = q_depense.filter(DepenseVehicule.occurred_at <= _date_to_dt(end, False))
+        q_verse = q_verse.filter(VersementChauffeur.paid_at <= _day_bounds(end, False))
+        q_depense = q_depense.filter(DepenseVehicule.occurred_at <= _day_bounds(end, False))
 
     verses_total = q_verse.with_entities(func.coalesce(func.sum(VersementChauffeur.amount), Decimal("0"))).scalar() or Decimal("0")
     depenses_total = q_depense.with_entities(func.coalesce(func.sum(DepenseVehicule.amount), Decimal("0"))).scalar() or Decimal("0")
@@ -944,11 +1067,15 @@ def resume_financier(
         "vehicules_actifs": db.query(func.count(Vehicule.id))
             .filter(Vehicule.business_id == business.id, Vehicule.status == VehiculeStatut.ACTIVE)
             .scalar() or 0,
-        "chauffeurs_actifs": db.query(func.count(Chauffeur.id))
-            .filter(Chauffeur.status == ChauffeurStatut.ACTIVE)
+        # Un chauffeur n'a pas de business_id propre : il est scope a l'activite
+        # par ses affectations sur des vehicules de cette activite.
+        "chauffeurs_actifs": db.query(func.count(func.distinct(Affectation.driver_id)))
+            .join(Vehicule, Affectation.vehicle_id == Vehicule.id)
+            .filter(Vehicule.business_id == business.id, Affectation.status == AffectationStatut.ACTIVE)
             .scalar() or 0,
         "affectations_actives": db.query(func.count(Affectation.id))
-            .filter(Affectation.status == AffectationStatut.ACTIVE)
+            .join(Vehicule, Affectation.vehicle_id == Vehicule.id)
+            .filter(Vehicule.business_id == business.id, Affectation.status == AffectationStatut.ACTIVE)
             .scalar() or 0,
     }
 
