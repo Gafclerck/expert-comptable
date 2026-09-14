@@ -24,14 +24,13 @@ def test_creation_compte_refusee_aux_non_root(client, assurance, co_owner):
 
 def test_list_comptes_scope_par_business(client, root, db, assurance, poulets, co_owner):
     link_person_to_business(db, co_owner.person, assurance)
-    create_account(client, root, assurance, name="Caisse Assurance")
-    create_account(client, root, poulets, name="Caisse Poulets")
 
     response = client.get("/api/ledger/accounts", headers=auth_headers(co_owner))
     assert response.status_code == 200
-    names = [a["name"] for a in response.json()]
-    assert "Caisse Assurance" in names
-    assert "Caisse Poulets" not in names
+    accounts = response.json()
+    assert len(accounts) == 1
+    assert accounts[0]["business_id"] == str(assurance.id)
+    assert accounts[0]["active"] is True
 
 
 def test_encaisser_prime_alimente_le_solde(client, root, db, assurance, co_owner):

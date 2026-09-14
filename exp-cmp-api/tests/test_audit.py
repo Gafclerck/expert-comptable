@@ -2,14 +2,18 @@ from tests.conftest import auth_headers, link_person_to_business, make_user
 from app.modules.audit.models import AuditLog
 
 
-def test_journalisation_dune_transaction(client, root, db, assurance, co_owner):
-    link_person_to_business(db, co_owner.person, assurance)
-
-    account = client.post(
-        "/api/ledger/accounts",
+def test_journalisation_dune_transaction(client, root, db):
+    # One-to-one : une nouvelle activite cree sa caisse unique automatiquement
+    # (audit « accounts » CREATE), on l'utilise pour la transaction.
+    business = client.post(
+        "/api/identity/businesses",
         headers=auth_headers(root),
-        json={"business_id": str(assurance.id), "name": "Caisse", "type": "cash"},
+        json={"code": "boulangerie", "name": "Boulangerie Moderne"},
     ).json()
+    account = client.get(
+        f"/api/ledger/accounts?business_id={business['id']}",
+        headers=auth_headers(root),
+    ).json()[0]
     category = client.post(
         "/api/ledger/categories",
         headers=auth_headers(root),
@@ -18,9 +22,9 @@ def test_journalisation_dune_transaction(client, root, db, assurance, co_owner):
 
     client.post(
         "/api/ledger/transactions",
-        headers=auth_headers(co_owner),
+        headers=auth_headers(root),
         json={
-            "business_id": str(assurance.id),
+            "business_id": business["id"],
             "account_id": account["id"],
             "type": "revenue",
             "amount": "25000.00",
@@ -39,16 +43,14 @@ def test_journalisation_transfer(client, root, db, assurance, poulets, co_owner)
     link_person_to_business(db, co_owner.person, assurance)
     link_person_to_business(db, co_owner.person, poulets)
 
-    src = client.post(
-        "/api/ledger/accounts",
+    src = client.get(
+        f"/api/ledger/accounts?business_id={str(assurance.id)}",
         headers=auth_headers(root),
-        json={"business_id": str(assurance.id), "name": "Src", "type": "cash"},
-    ).json()
-    dst = client.post(
-        "/api/ledger/accounts",
+    ).json()[0]
+    dst = client.get(
+        f"/api/ledger/accounts?business_id={str(poulets.id)}",
         headers=auth_headers(root),
-        json={"business_id": str(poulets.id), "name": "Dst", "type": "cash"},
-    ).json()
+    ).json()[0]
 
     client.post(
         "/api/ledger/transfers",
@@ -85,12 +87,12 @@ def test_creation_user_journalise(client, root, db):
     assert any(log.entity_type == "users" and log.action.value == "CREATE" for log in logs)
 
 
-def test_filtre_par_action(client, root, db, assurance, co_owner):
-    link_person_to_business(db, co_owner.person, assurance)
+def test_filtre_par_action(client, root, db):
+    # La creation d'une activite journalise automatiquement sa caisse unique.
     client.post(
-        "/api/ledger/accounts",
+        "/api/identity/businesses",
         headers=auth_headers(root),
-        json={"business_id": str(assurance.id), "name": "Caisse", "type": "bank"},
+        json={"code": "boulangerie", "name": "Boulangerie Moderne"},
     )
     response = client.get(
         "/api/audit/logs",
@@ -98,4 +100,6 @@ def test_filtre_par_action(client, root, db, assurance, co_owner):
         params={"entity_type": "accounts"},
     )
     assert response.status_code == 200
-    assert all(log["entity_type"] == "accounts" for log in response.json())
+    logs = response.json()
+    assert logs
+    assert all(log["entity_type"] == "accounts" for log in logs)

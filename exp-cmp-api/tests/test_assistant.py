@@ -61,10 +61,10 @@ def test_paiement_par_phrase(client, root, assurance):
     assert any(log["entity_type"] == "insurance_payments" for log in logs)
 
 
-def test_caisse_par_defaut_quand_plusieurs_comptes(client, root, assurance):
-    # Des qu'il y a plusieurs caisses, la Caisse Principale (compte cree a la
-    # creation du business) est preselectionnee : 1 business = 1 compte par defaut.
-    create_account(client, root, assurance, name="Caisse Wave")
+def test_caisse_unique_encaisse_sur_le_compte_de_lactivite(client, root, assurance):
+    # One-to-one : chaque activite possede une seule caisse (la caisse par
+    # defaut, nommee Caisse Principale). L'encaissement y aboutit sans
+    # clarification, quelle que soit la phrase de l'utilisateur.
     _create_client_and_contract(client, root)
 
     reply = _chat(client, root, "Encaisser 40 000 de Tagoun pour le contrat MAT-E2E")
@@ -73,11 +73,11 @@ def test_caisse_par_defaut_quand_plusieurs_comptes(client, root, assurance):
     assert "Caisse Principale" in reply["text"]
 
     accounts = client.get("/api/ledger/accounts", headers=auth_headers(root)).json()
-    wave = next(a for a in accounts if a["name"] == "Caisse Wave")
+    assert len(accounts) == 1
     balance = client.get(
-        f"/api/ledger/accounts/{wave['id']}/balance", headers=auth_headers(root)
+        f"/api/ledger/accounts/{accounts[0]['id']}/balance", headers=auth_headers(root)
     ).json()
-    assert float(balance["balance"]) == 0
+    assert float(balance["balance"]) == 40000
 
 
 def test_solde_caisse_assurance_sans_clarification(client, root, assurance):

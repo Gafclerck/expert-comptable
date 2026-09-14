@@ -47,7 +47,9 @@ class TransferStatus(str, Enum):
 class Account(UUIDPkMixin, Base):
     __tablename__ = "accounts"
 
-    business_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("businesses.id"), nullable=False, index=True)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("businesses.id"), nullable=False, unique=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     type: Mapped[AccountType] = mapped_column(
         sa_enum(AccountType, length=20), nullable=False

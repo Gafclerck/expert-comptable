@@ -42,13 +42,16 @@ def link_person_to_business(db, person, business, role=BusinessAccountRole.OWNER
 
 
 def create_account(client, actor, business, name="Caisse principale", acct_type="cash") -> dict:
-    response = client.post(
-        "/api/ledger/accounts",
+    """Renvoie le compte unique de l'activite (one-to-one : une seule caisse
+    par business, creee automatiquement). Le nom/type passes sont ignores."""
+    response = client.get(
+        f"/api/ledger/accounts?business_id={str(business.id)}",
         headers=auth_headers(actor),
-        json={"business_id": str(business.id), "name": name, "type": acct_type},
     )
-    assert response.status_code == 201
-    return response.json()
+    assert response.status_code == 200
+    accounts = response.json()
+    assert accounts, f"l'activite {business.code} doit disposer d'une caisse"
+    return accounts[0]
 
 
 def create_category(client, actor, code="vente-primes", name="Vente de primes", ctype="credit") -> dict:

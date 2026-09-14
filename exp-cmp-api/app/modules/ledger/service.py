@@ -114,6 +114,9 @@ def create_account(
 ) -> Account:
     if not business_exists(db, business_id):
         raise HTTPException(status_code=404, detail="Activite introuvable")
+    # One-to-one : une activite ne possede qu'une seule caisse.
+    if db.query(Account).filter(Account.business_id == business_id).first():
+        raise HTTPException(status_code=409, detail="Cette activite dispose deja d'un compte")
     account = Account(
         business_id=business_id,
         name=name,

@@ -36,6 +36,7 @@ def init_db(db: Session) -> None:
 
     from decimal import Decimal
     from app.modules.ledger.models import Account, AccountType, Category, CategoryType
+    from app.modules.ledger.service import DEFAULT_ACCOUNT_NAME
 
     roles_by_code: dict[str, Role] = {}
     for code in RoleCode:
@@ -56,8 +57,8 @@ def init_db(db: Session) -> None:
         db.flush()
 
     # Creer une caisse par defaut pour chaque activite existante.
-    # Le nom est unifie sur "Caisse Principale", coherent avec
-    # ledger.DEFAULT_ACCOUNT_NAME et la preselection de l'assistant.
+    # One-to-one : une activite = une seule caisse, au nom unifie
+    # (DEFAULT_ACCOUNT_NAME), coherent avec la preselection de l'assistant.
     businesses = db.query(Business).all()
     for b in businesses:
         has_account = db.query(Account).filter(Account.business_id == b.id).first()
@@ -65,7 +66,7 @@ def init_db(db: Session) -> None:
             db.add(
                 Account(
                     business_id=b.id,
-                    name="Caisse Principale",
+                    name=DEFAULT_ACCOUNT_NAME,
                     type=AccountType.CASH,
                     currency="FCFA",
                     opening_balance=Decimal("0"),
