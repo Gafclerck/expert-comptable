@@ -63,14 +63,14 @@ def test_paiement_par_phrase(client, root, assurance):
 
 def test_caisse_unique_encaisse_sur_le_compte_de_lactivite(client, root, assurance):
     # One-to-one : chaque activite possede une seule caisse (la caisse par
-    # defaut, nommee Caisse Principale). L'encaissement y aboutit sans
-    # clarification, quelle que soit la phrase de l'utilisateur.
+    # defaut, nommee specifiquement pour chaque business). L'encaissement y
+    # aboutit sans clarification, quelle que soit la phrase de l'utilisateur.
     _create_client_and_contract(client, root)
 
     reply = _chat(client, root, "Encaisser 40 000 de Tagoun pour le contrat MAT-E2E")
     assert reply["executed"] is True
     assert reply["intent"] == "record_payment"
-    assert "Caisse Principale" in reply["text"]
+    assert "Caisse Assurance" in reply["text"]
 
     accounts = client.get("/api/ledger/accounts", headers=auth_headers(root)).json()
     assert len(accounts) == 1
@@ -90,14 +90,14 @@ def test_solde_caisse_assurance_sans_clarification(client, root, assurance):
     assert reply["clarification"] is False
     assert reply["intent"] == "get_balance"
     assert "30 000" in reply["text"]
-    assert "Caisse Principale" in reply["text"]
+    assert "Caisse Assurance" in reply["text"]
 
 
 def test_solde_caisse_poulailler_fallback_vers_activite_poulets(client, root, poulets):
     # Reproduit le bug : « solde caisse poulailler » demandait « Sur quelle caisse ? »
     # en boucle car le business etait pilote vers l'assurance. Le fallback doit
-    # resoudre la caisse de l'activite poulets (meme nom « Caisse Poulets » distinct
-    # de « Caisse Assurance »).
+    # resoudre la caisse de l'activite poulets (« Caisse Poulailler », nom propre
+    # distinct de « Caisse Assurance »).
     acc = client.get(
         "/api/ledger/accounts?business_id=" + str(poulets.id),
         headers=auth_headers(root),
@@ -197,15 +197,15 @@ def test_reponse_formulee_par_formulateur(client, root, assurance, monkeypatch):
         def formulate(self, operation, result, user_message=""):
             captured["operation"] = operation
             captured["result"] = result
-            return "La caisse Principale affiche un solde de 0 FCFA pour le moment."
+            return "La Caisse Assurance affiche un solde de 0 FCFA pour le moment."
 
     monkeypatch.setattr("app.modules.assistant.service.get_formulator", lambda: _FakeFormulator())
 
     reply = _chat(client, root, "Solde de la caisse")
     assert reply["executed"] is True
-    assert reply["text"] == "La caisse Principale affiche un solde de 0 FCFA pour le moment."
+    assert reply["text"] == "La Caisse Assurance affiche un solde de 0 FCFA pour le moment."
     assert captured["operation"] == "get_balance"
-    assert captured["result"]["account"] == "Caisse Principale"
+    assert captured["result"]["account"] == "Caisse Assurance"
     assert captured["result"]["balance"] == "0 FCFA"
 
 
@@ -221,7 +221,7 @@ def test_repli_statique_si_formulateur_echec(client, root, assurance, monkeypatc
     reply = _chat(client, root, "Encaisser 40 000 de Tagoun pour le contrat MAT-E2E")
     assert reply["executed"] is True
     assert "40 000" in reply["text"]
-    assert "Caisse Principale" in reply["text"]
+    assert "Caisse Assurance" in reply["text"]
 
 
 def test_clarification_montant_puis_execution(client, root, assurance):
@@ -302,8 +302,8 @@ def test_echeance_par_phrase(client, root, assurance):
 
 
 def test_achat_et_vente_poulets_par_phrase(client, root, poulets):
-    # La caisse (Caisse Principale) et les categories par defaut sont seedees par
-    # init_db a la creation du business : le test s'appuie dessus (1 business = 1 compte).
+# La caisse (Caisse Poulailler) et les categories par defaut sont seedees par
+        # init_db a la creation du business : le test s'appuie dessus (1 business = 1 compte).
     reply = _chat(client, root, "J'ai achete 24 poulets a 120000")
     assert reply["executed"] is True
     assert reply["intent"] == "add_purchase"

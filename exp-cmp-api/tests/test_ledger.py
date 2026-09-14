@@ -13,6 +13,16 @@ def test_creation_compte_et_categorie(client, root, assurance):
     assert category["code"] == "vente-primes"
 
 
+def test_caisse_seedee_chaque_business_a_son_propre_nom(client, root, assurance, poulets, vtc):
+    # init_db seede une caisse unique par activite avec un nom specifique
+    # (jamais generique) : Assurance / Poulailler / VTC.
+    accounts = client.get("/api/ledger/accounts", headers=auth_headers(root)).json()
+    names_by_business = {a["business_id"]: a["name"] for a in accounts}
+    assert names_by_business[str(assurance.id)] == "Caisse Assurance"
+    assert names_by_business[str(poulets.id)] == "Caisse Poulailler"
+    assert names_by_business[str(vtc.id)] == "Caisse VTC"
+
+
 def test_creation_compte_refusee_aux_non_root(client, assurance, co_owner):
     response = client.post(
         "/api/ledger/accounts",
@@ -211,10 +221,10 @@ def test_caisse_par_defaut_a_la_creation_business(client, root):
     assert res.status_code == 201
     business_id = res.json()["id"]
 
-    # Verifier qu'une Caisse Principale a ete automatiquement creee
+    # Verifier qu'une caisse nommee (non generique) a ete automatiquement creee
     accounts = client.get(f"/api/ledger/accounts?business_id={business_id}", headers=auth_headers(root)).json()
     assert len(accounts) == 1
-    assert accounts[0]["name"] == "Caisse Principale"
+    assert accounts[0]["name"] == "Caisse Boulangerie Moderne"
     assert accounts[0]["type"] == "cash"
     assert accounts[0]["currency"] == "FCFA"
     assert float(accounts[0]["opening_balance"]) == 0.0

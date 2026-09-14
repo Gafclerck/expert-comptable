@@ -51,19 +51,32 @@ def list_accounts(db: Session, user, business_id: uuid.UUID | None = None, skip:
     return query.order_by(Account.created_at).offset(skip).limit(limit).all()
 
 
-DEFAULT_ACCOUNT_NAME = "Caisse Principale"
+_ACCOUNT_NAME_BY_CODE: dict[str, str] = {
+    "poulets": "Caisse Poulailler",
+}
+
+
+def default_account_name_for(business_code: str | None, business_name: str) -> str:
+    """Nom de caisse specifique a chaque activite (jamais generique)."""
+    if business_code in _ACCOUNT_NAME_BY_CODE:
+        return _ACCOUNT_NAME_BY_CODE[business_code]
+    return f"Caisse {business_name}"
 
 
 def create_default_business_account(
-    db: Session, business_id: uuid.UUID, actor_id: str | None = None
+    db: Session,
+    business_id: uuid.UUID,
+    business_code: str,
+    business_name: str,
+    actor_id: str | None = None,
 ) -> Account | None:
-    """Cree une caisse par defaut pour une activite si elle n'en possede pas encore."""
+    """Cree la caisse unique d'une activite (nom specifique au business)."""
     existing = db.query(Account).filter(Account.business_id == business_id).first()
     if existing:
         return existing
     account = Account(
         business_id=business_id,
-        name=DEFAULT_ACCOUNT_NAME,
+        name=default_account_name_for(business_code, business_name),
         type=AccountType.CASH,
         currency="FCFA",
         opening_balance=Decimal("0"),
@@ -84,14 +97,22 @@ def create_default_business_account(
 def _handle_business_created(
     entity_id: str | None = None,
     actor_id: str | None = None,
+    new_values: dict | None = None,
     **_ignored,
 ) -> None:
     if not entity_id:
         return
+    values = new_values or {}
     from app.core.db import session as session_factory
     db = session_factory()
     try:
-        create_default_business_account(db, uuid.UUID(entity_id), actor_id=actor_id)
+        create_default_business_account(
+            db,
+            uuid.UUID(entity_id),
+            business_code=values.get("code"),
+            business_name=values.get("name"),
+            actor_id=actor_id,
+        )
     finally:
         db.close()
 
