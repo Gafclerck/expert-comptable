@@ -7,3 +7,4 @@ DESIGN_PATTERN.md
 
 # Config Docker locale (contient les mots de passe de la stack)
 .env
+docs

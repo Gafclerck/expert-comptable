@@ -129,11 +129,10 @@ export default function Comptes() {
                 <button
                   key={acc.id}
                   onClick={() => setActiveAccount(acc.id)}
-                  className={`p-4 rounded-xl border text-left transition-all ${
-                    activeAccount === acc.id
-                      ? 'border-navy-400 bg-navy-50 shadow-sm'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  className={`p-4 rounded-xl border text-left transition-all ${activeAccount === acc.id
+                    ? 'border-navy-400 bg-navy-50 shadow-sm rounded-xl'
+                    : 'border-slate-200 bg-white hover:border-slate-400'
+                    }`}
                 >
                   <div className="text-xl mb-2">{accountIcons[acc.type] ?? '💰'}</div>
                   <div className="text-xs text-slate-500 font-medium mb-1">{acc.label}</div>
@@ -170,34 +169,34 @@ export default function Comptes() {
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="text-left py-2 px-4 text-xs font-semibold text-slate-500">Compte</th>
-                    <th className="text-right py-2 px-4 text-xs font-semibold text-slate-500">Part</th>
-                    <th className="text-right py-2 px-4 text-xs font-semibold text-slate-600">Solde</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {accounts.map(acc => (
-                    <tr key={acc.id} className="border-b border-slate-50 hover:bg-slate-50">
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          <span>{accountIcons[acc.type] ?? '💰'}</span>
-                          <span className="text-slate-700 font-medium">{acc.label}</span>
-                        </div>
-                      </td>
-                      <td className="p-4 text-right text-xs text-slate-400">
-                        {totalBalance > 0 ? Math.round((acc.balance / totalBalance) * 100) : 0}%
-                      </td>
-                      <td className="p-4 text-right font-financial text-sm font-semibold text-slate-900">{formatCFA(acc.balance)}</td>
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100">
+                      <th className="text-left py-2 px-4 text-xs font-semibold text-slate-500">Compte</th>
+                      <th className="text-right py-2 px-4 text-xs font-semibold text-slate-500">Part</th>
+                      <th className="text-right py-2 px-4 text-xs font-semibold text-slate-600">Solde</th>
                     </tr>
-                  ))}
-                  <tr className="bg-slate-50 font-semibold">
-                    <td className="p-4 text-xs text-slate-600 font-bold uppercase">Total</td>
-                    <td className="p-4 text-right text-xs text-slate-400">100%</td>
-                    <td className="p-4 text-right font-financial text-base font-bold text-navy-800">{formatCFA(totalBalance)}</td>
-                  </tr>
-                </tbody>
+                  </thead>
+                  <tbody>
+                    {accounts.map(acc => (
+                      <tr key={acc.id} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="p-4">
+                          <div className="flex items-center gap-2">
+                            <span>{accountIcons[acc.type] ?? '💰'}</span>
+                            <span className="text-slate-700 font-medium">{acc.label}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-right text-xs text-slate-400">
+                          {totalBalance > 0 ? Math.round((acc.balance / totalBalance) * 100) : 0}%
+                        </td>
+                        <td className="p-4 text-right font-financial text-sm font-semibold text-slate-900">{formatCFA(acc.balance)}</td>
+                      </tr>
+                    ))}
+                    <tr className="bg-slate-50 font-semibold">
+                      <td className="p-4 text-xs text-slate-600 font-bold uppercase">Total</td>
+                      <td className="p-4 text-right text-xs text-slate-400">100%</td>
+                      <td className="p-4 text-right font-financial text-base font-bold text-navy-800">{formatCFA(totalBalance)}</td>
+                    </tr>
+                  </tbody>
                 </table>
               </div>
             </div>
