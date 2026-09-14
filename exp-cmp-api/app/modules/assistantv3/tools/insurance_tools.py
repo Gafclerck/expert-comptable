@@ -1,0 +1,529 @@
+"""Business assurance : declare son module (alias + indice de contexte), ses
+outils, et le seul type de champ qui lui est vraiment propre ('contract',
+puisqu'il interroge insurance_service). Tout le reste (montant, quantite,
+compte, categorie) reutilise les types communs de field_types.py.
+
+'payment_amount' est une variante du type 'amount' commun, qui ajoute le
+raccourci \"reste\"/\"reliquat\" (paye tout ce qui reste sur le contrat) :
+c'est propre a l'assurance (ca interroge insurance_service.remaining_amount),
+donc declare ici par composition plutot que dans le type commun.
+"""
+import uuid
+from datetime import date, timedelta
+from decimal import Decimal
+
+from fastapi import HTTPException
+
+from app.modules.assistantv3 import parsing, resolvers
+from app.modules.assistantv3.field_types import AmountFieldType
+from app.modules.assistantv3.registry import BusinessModule, ToolSpec, register, register_business, register_field_type
+from app.modules.identity.service import get_person_summary
+from app.modules.insurance import service as insurance_service
+
+BUSINESS_CODE = "assurance"
+DEFAULT_CONTRACT_TYPE = "assurance-auto"
+
+
+class ContractFieldType:
+    """Reference un contrat par matricule ou par client. Propre a l'assurance :
+    interroge insurance_service, aucun autre business n'a de contrats."""
+
+    is_entity_ref = True
+
+    def validate(self, raw) -> bool:
+        return bool(raw)
+
+    def coerce(self, raw):
+        return raw
+
+    def resolve(self, db, actor, spec, step, field: str) -> None:
+        id_key = f"{field}_id"
+        if step.params.get(id_key):
+            return
+        ref = step.params.get(field)
+        if not ref:
+            return
+        try:
+            contract = resolvers.resolve_contract(db, actor, ref)
+        except HTTPException as exc:
+            raise resolvers.ClarificationNeeded(field, str(exc.detail))
+        step.params[id_key] = str(contract.id)
+
+    def fill(self, db, actor, step, field: str, message: str, choices: list[dict]) -> bool:
+        ref = (
+            parsing.parse_matricule(message)
+            or parsing.parse_client_number(message)
+            or parsing.extract_client_name(message)
+            or parsing.clean_free_text(message)
+        )
+        if not ref:
+            return False
+        step.params[field] = ref
+        step.params.pop(f"{field}_id", None)
+        return True
+
+
+class PaymentAmountFieldType(AmountFieldType):
+    """Comme 'amount', avec le raccourci \"reste\"/\"reliquat\" : ne s'applique
+    qu'a un champ dont le contract_id est deja resolu (record_payment).
+    `requires_fields` fait echouer l'enregistrement de tout outil qui
+    utiliserait ce type sans que 'contract' precede le champ concerne dans
+    order : sans ca, le raccourci se desactiverait silencieusement (il
+    retomberait sur AmountFieldType.fill, qui echoue proprement sur "le
+    reste" mais sans jamais avertir que la fonctionnalite est indisponible).
+    """
+
+    requires_fields = ["contract"]
+
+    def fill(self, db, actor, step, field: str, message: str, choices: list[dict]) -> bool:
+        norm = parsing.normalize(message)
+        if any(word in norm for word in ("reste", "reliquat")) and step.params.get("contract_id"):
+            contract = insurance_service.get_contract(db, actor, uuid.UUID(step.params["contract_id"]))
+            amount = insurance_service.remaining_amount(db, contract)
+            if amount <= 0:
+                return False
+            step.params[field] = str(amount)
+            return True
+        return super().fill(db, actor, step, field, message, choices)
+
+
+def _contract_from_params(db, actor, params: dict):
+    if params.get("contract_id"):
+        return insurance_service.get_contract(db, actor, uuid.UUID(params["contract_id"]))
+    return resolvers.resolve_contract(db, actor, params["contract"])
+
+
+def create_client(db, actor, params: dict):
+    full_name = " ".join(word.capitalize() for word in params["client"].split())
+    client = insurance_service.create_client(
+        db, actor, full_name=full_name, phone=params.get("phone"), client_number=params.get("client_number")
+    )
+    person = get_person_summary(db, client.person_id)
+    facts = {"kind": "create_client", "client": person.full_name, "client_number": client.client_number}
+    text = f"Client cree: {person.full_name} ({client.client_number})."
+    return facts, client.id, text
+
+
+def create_contract(db, actor, params: dict):
+    client = insurance_service.find_client(db, actor, params["client"])
+    person = get_person_summary(db, client.person_id)
+    start = date.today()
+    contract = insurance_service.create_contract(
+        db, actor,
+        client_id=client.id,
+        matricule=params["matricule"],
+        contract_type=DEFAULT_CONTRACT_TYPE,
+        premium=params["premium"],
+        start_date=start,
+        end_date=start + timedelta(days=365),
+    )
+    remaining = insurance_service.remaining_amount(db, contract)
+    facts = {
+        "kind": "create_contract",
+        "matricule": contract.matricule,
+        "client": person.full_name,
+        "premium": f"{resolvers.fmt_amount(contract.premium)} FCFA",
+        "remaining": f"{resolvers.fmt_amount(remaining)} FCFA",
+        "contract_type": contract.contract_type,
+        "start_date": resolvers.fmt_date(contract.start_date),
+        "end_date": resolvers.fmt_date(contract.end_date),
+    }
+    text = (
+        f"Contrat cree: {contract.matricule} pour {person.full_name} - prime "
+        f"{resolvers.fmt_amount(contract.premium)} FCFA, reste a payer {resolvers.fmt_amount(remaining)} FCFA "
+        f"(type {contract.contract_type}, du {resolvers.fmt_date(contract.start_date)} au {resolvers.fmt_date(contract.end_date)})."
+    )
+    return facts, contract.id, text
+
+
+def record_payment(db, actor, params: dict):
+    contract_id = uuid.UUID(params["contract_id"])
+    contract = insurance_service.get_contract(db, actor, contract_id)
+    payment = insurance_service.create_payment(
+        db, actor,
+        contract_id=contract.id,
+        amount=params["amount"],
+        paid_at=None,
+        account_id=uuid.UUID(params["account_id"]),
+        category_id=uuid.UUID(params["category_id"]),
+    )
+    remaining = insurance_service.remaining_amount(db, contract)
+    facts = {
+        "kind": "record_payment",
+        "amount": f"{resolvers.fmt_amount(payment.amount)} FCFA",
+        "account": params["account_name"],
+        "matricule": contract.matricule,
+        "remaining": f"{resolvers.fmt_amount(remaining)} FCFA",
+        "remaining_status": resolvers.remaining_status(remaining),
+    }
+    text = (
+        f"Paiement encaisse: {resolvers.fmt_amount(payment.amount)} FCFA sur la caisse "
+        f"\"{params['account_name']}\" pour le contrat {contract.matricule} - {resolvers.format_remaining(remaining)}."
+    )
+    return facts, payment.id, text
+
+
+def get_remaining(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    remaining = insurance_service.remaining_amount(db, contract)
+    facts = {
+        "kind": "get_remaining",
+        "matricule": contract.matricule,
+        "premium": f"{resolvers.fmt_amount(contract.premium)} FCFA",
+        "remaining": f"{resolvers.fmt_amount(remaining)} FCFA",
+        "remaining_status": resolvers.remaining_status(remaining),
+    }
+    text = f"{contract.matricule} - {resolvers.format_remaining(remaining)} (prime {resolvers.fmt_amount(contract.premium)} FCFA)."
+    return facts, contract.id, text
+
+
+def get_client_info(db, actor, params: dict):
+    client = insurance_service.find_client(db, actor, params["client"])
+    person = get_person_summary(db, client.person_id)
+    contracts = insurance_service.list_contracts(db, actor, client_id=client.id)
+    matricules = ", ".join(c.matricule for c in contracts) if contracts else "aucun"
+    facts = {
+        "kind": "get_client_info",
+        "client": person.full_name,
+        "client_number": client.client_number,
+        "status": client.status.value,
+        "phone": person.phone or "non renseigne",
+        "contracts": matricules,
+    }
+    text = (
+        f"Client {person.full_name} ({client.client_number}) - statut {client.status.value}, "
+        f"telephone {person.phone or 'non renseigne'}. Contrats: {matricules}."
+    )
+    return facts, client.id, text
+
+
+def get_contract_info(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    client = insurance_service.get_client(db, actor, contract.client_id)
+    person = get_person_summary(db, client.person_id)
+    payments = insurance_service.list_payments(db, actor, contract.id)
+    total_paid = sum((p.amount for p in payments), start=Decimal("0"))
+    remaining = insurance_service.remaining_amount(db, contract)
+    facts = {
+        "kind": "get_contract_info",
+        "matricule": contract.matricule,
+        "contract_type": contract.contract_type,
+        "client": person.full_name,
+        "premium": f"{resolvers.fmt_amount(contract.premium)} FCFA",
+        "paid": f"{resolvers.fmt_amount(total_paid)} FCFA",
+        "remaining": f"{resolvers.fmt_amount(remaining)} FCFA",
+        "remaining_status": resolvers.remaining_status(remaining),
+        "start_date": resolvers.fmt_date(contract.start_date),
+        "end_date": resolvers.fmt_date(contract.end_date),
+        "status": contract.status.value,
+    }
+    text = (
+        f"Contrat {contract.matricule} ({contract.contract_type}) pour {person.full_name} - "
+        f"prime {resolvers.fmt_amount(contract.premium)} FCFA, paye {resolvers.fmt_amount(total_paid)} FCFA, "
+        f"{resolvers.format_remaining(remaining)}. Du {resolvers.fmt_date(contract.start_date)} au "
+        f"{resolvers.fmt_date(contract.end_date)} - statut {contract.status.value}."
+    )
+    return facts, contract.id, text
+
+
+def get_dues(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    dues = insurance_service.list_dues(db, actor, contract.id)
+    if not dues:
+        facts = {"kind": "get_dues", "matricule": contract.matricule, "dues": []}
+        text = f"Aucune echeance programmee pour {contract.matricule}."
+        return facts, contract.id, text
+    lines = [f"- {resolvers.fmt_date(d.due_date)}: {resolvers.fmt_amount(d.amount_due)} FCFA ({d.status.value})" for d in dues]
+    facts = {
+        "kind": "get_dues",
+        "matricule": contract.matricule,
+        "dues": [
+            {"date": resolvers.fmt_date(d.due_date), "amount": f"{resolvers.fmt_amount(d.amount_due)} FCFA", "status": d.status.value}
+            for d in dues
+        ],
+    }
+    text = f"Echeances de {contract.matricule}:\n" + "\n".join(lines)
+    return facts, contract.id, text
+
+
+def add_due(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    due = insurance_service.create_due(db, actor, contract_id=contract.id, due_date=params["due_date"], amount_due=params["amount"])
+    facts = {
+        "kind": "add_due",
+        "matricule": contract.matricule,
+        "amount": f"{resolvers.fmt_amount(due.amount_due)} FCFA",
+        "due_date": resolvers.fmt_date(due.due_date),
+    }
+    text = f"Echeance ajoutee pour {contract.matricule}: {resolvers.fmt_amount(due.amount_due)} FCFA au {resolvers.fmt_date(due.due_date)}."
+    return facts, due.id, text
+
+
+def list_clients(db, actor, params: dict):
+    clients = insurance_service.list_clients(db, actor, limit=50)
+    if not clients:
+        return {"kind": "list_clients", "clients": []}, None, "Aucun client enregistre."
+    rows = []
+    lines = []
+    for c in clients:
+        person = get_person_summary(db, c.person_id)
+        rows.append({"client_number": c.client_number, "full_name": person.full_name, "status": c.status.value})
+        lines.append(f"- {c.client_number} : {person.full_name} ({c.status.value})")
+    facts = {"kind": "list_clients", "count": str(len(clients)), "clients": rows}
+    text = f"Clients ({len(clients)}) :\n" + "\n".join(lines)
+    return facts, None, text
+
+
+def list_contracts(db, actor, params: dict):
+    ref = params.get("client")
+    client_id = None
+    client_label = None
+    if ref:
+        try:
+            client = insurance_service.find_client(db, actor, ref)
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                raise resolvers.ClarificationNeeded("client", str(exc.detail))
+            return {"kind": "list_contracts", "client": ref, "contracts": []}, None, f"Aucun client trouve pour \"{ref}\"."
+        client_id = client.id
+        client_label = get_person_summary(db, client.person_id).full_name
+
+    contracts = insurance_service.list_contracts(db, actor, client_id=client_id, limit=50)
+    if not contracts:
+        text = f"Aucun contrat pour {client_label}." if client_label else "Aucun contrat enregistre."
+        return {"kind": "list_contracts", "contracts": []}, None, text
+
+    rows = []
+    lines = []
+    for c in contracts:
+        remaining = insurance_service.remaining_amount(db, c)
+        rows.append({
+            "matricule": c.matricule,
+            "premium": f"{resolvers.fmt_amount(c.premium)} FCFA",
+            "remaining_status": resolvers.remaining_status(remaining),
+            "status": c.status.value,
+        })
+        lines.append(
+            f"- {c.matricule} : prime {resolvers.fmt_amount(c.premium)} FCFA, "
+            f"{resolvers.remaining_status(remaining)}, statut {c.status.value}"
+        )
+    facts = {"kind": "list_contracts", "count": str(len(contracts)), "contracts": rows}
+    header = f"Contrats de {client_label} ({len(contracts)}) :" if client_label else f"Tous les contrats ({len(contracts)}) :"
+    text = header + "\n" + "\n".join(lines)
+    return facts, None, text
+
+
+def get_payment_history(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    payments = insurance_service.list_payments(db, actor, contract.id, limit=50)
+    if not payments:
+        return (
+            {"kind": "get_payment_history", "matricule": contract.matricule, "payments": []},
+            contract.id,
+            f"Aucun paiement enregistre pour {contract.matricule}.",
+        )
+    rows = [{"date": resolvers.fmt_date(p.paid_at), "amount": f"{resolvers.fmt_amount(p.amount)} FCFA"} for p in payments]
+    lines = [f"- {r['date']} : {r['amount']}" for r in rows]
+    facts = {"kind": "get_payment_history", "matricule": contract.matricule, "payments": rows}
+    text = f"Paiements de {contract.matricule} :\n" + "\n".join(lines)
+    return facts, contract.id, text
+
+
+def cancel_contract(db, actor, params: dict):
+    contract = _contract_from_params(db, actor, params)
+    cancelled = insurance_service.cancel_contract(db, actor, contract.id)
+    facts = {"kind": "cancel_contract", "matricule": cancelled.matricule, "status": cancelled.status.value}
+    text = f"Contrat {cancelled.matricule} annule. Aucun remboursement n'est effectue automatiquement."
+    return facts, cancelled.id, text
+
+
+_CONTRACT_QUESTION = "Pour quel contrat ? Indiquez la matricule (ex. MAT-001) ou le nom du client."
+
+
+def _register() -> None:
+    register_business(BusinessModule(
+        code=BUSINESS_CODE,
+        aliases={"assurance", "assur"},
+        context_hint="Gestion de polices d'assurance : clients, contrats, primes, echeances.",
+    ))
+    register_field_type("contract", ContractFieldType())
+    register_field_type("payment_amount", PaymentAmountFieldType())
+
+    register(ToolSpec(
+        name="create_client",
+        label="Creer un client",
+        example="Creer un client Moussa Camara",
+        handler=create_client,
+        business=BUSINESS_CODE,
+        parameters={
+            "properties": {
+                "client": {"type": "string", "description": "Nom complet du client"},
+                "phone": {"type": "string", "description": "Numero de telephone (optionnel)"},
+                "client_number": {"type": "string", "description": "Numero de client existant (optionnel)"},
+            },
+            "required": ["client"],
+        },
+        order=["client"],
+        questions={"client": "Quel client ? Indiquez le nom (ex. Moussa Camara)."},
+        is_critical=False,
+        is_read_only=False,
+    ))
+    register(ToolSpec(
+        name="create_contract",
+        label="Creer un contrat",
+        example="Nouveau contrat pour Tagoun, matricule MAT-100, prime 100 000",
+        handler=create_contract,
+        business=BUSINESS_CODE,
+        parameters={
+            "properties": {
+                "client": {"type": "string", "description": "Nom du client"},
+                "matricule": {"type": "string", "description": "Matricule du contrat, ex. MAT-100"},
+                "premium": {"type": "number", "description": "Montant total de la prime"},
+            },
+            "required": ["client", "matricule", "premium"],
+        },
+        order=["client", "matricule", "premium"],
+        questions={
+            "client": "Quel client ? Indiquez le nom (ex. Moussa Camara).",
+            "matricule": "Quelle matricule ? (ex. MAT-001)",
+            "premium": "Quel montant de prime ? (ex. 100 000)",
+        },
+        is_critical=True,
+        is_read_only=False,
+    ))
+    register(ToolSpec(
+        name="record_payment",
+        label="Encaisser une prime",
+        example="Encaisser 40 000 de Tagoun pour le contrat MAT-E2E",
+        handler=record_payment,
+        business=BUSINESS_CODE,
+        parameters={
+            "properties": {
+                "contract": {"type": "string", "description": "Matricule du contrat ou nom du client"},
+                "amount": {"type": "number", "description": "Montant encaisse. A omettre si le client paie tout ce qui reste."},
+                "account": {"type": "string", "description": "Nom de la caisse (optionnel s'il n'y en a qu'une)"},
+                "category": {"type": "string", "description": "Categorie (optionnel s'il n'y en a qu'une)"},
+            },
+            "required": ["contract"],
+        },
+        order=["contract", "amount", "account", "category"],
+        questions={
+            "contract": _CONTRACT_QUESTION,
+            "amount": "Quel montant encaisser ? (ex. 40 000)",
+            "account": "Sur quelle caisse ?",
+            "category": "Sous quelle categorie ?",
+        },
+        field_type_overrides={"amount": "payment_amount", "category": "category_credit"},
+        is_critical=True,
+        is_read_only=False,
+    ))
+    register(ToolSpec(
+        name="get_remaining",
+        label="Reste a payer d'un contrat",
+        example="Reste a payer du contrat MAT-E2E",
+        handler=get_remaining,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": _CONTRACT_QUESTION},
+    ))
+    register(ToolSpec(
+        name="get_client_info",
+        label="Consulter les infos d'un client",
+        example="Infos du client Tagoun",
+        handler=get_client_info,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"client": {"type": "string", "description": "Nom du client"}}, "required": ["client"]},
+        order=["client"],
+        questions={"client": "Quel client ? Indiquez le nom (ex. Moussa Camara)."},
+    ))
+    register(ToolSpec(
+        name="get_contract_info",
+        label="Consulter les infos d'un contrat",
+        example="Infos du contrat MAT-E2E",
+        handler=get_contract_info,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": _CONTRACT_QUESTION},
+    ))
+    register(ToolSpec(
+        name="get_dues",
+        label="Consulter les echeances",
+        example="Echeances du contrat MAT-100",
+        handler=get_dues,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": _CONTRACT_QUESTION},
+    ))
+    register(ToolSpec(
+        name="add_due",
+        label="Ajouter une echeance",
+        example="Ajouter une echeance pour MAT-100 le 30/09 montant 20000",
+        handler=add_due,
+        business=BUSINESS_CODE,
+        parameters={
+            "properties": {
+                "contract": {"type": "string", "description": "Matricule du contrat ou nom du client"},
+                "due_date": {"type": "string", "description": "Date de l'echeance, format ISO AAAA-MM-JJ"},
+                "amount": {"type": "number", "description": "Montant prevu pour cette echeance"},
+            },
+            "required": ["contract", "due_date", "amount"],
+        },
+        order=["contract", "due_date", "amount"],
+        questions={
+            "contract": _CONTRACT_QUESTION,
+            "due_date": "Pour quelle date ? (ex. 30/09/2026)",
+            "amount": "Quel montant prevoir pour cette echeance ?",
+        },
+        is_critical=False,
+        is_read_only=False,
+    ))
+    register(ToolSpec(
+        name="list_clients",
+        label="Lister les clients",
+        example="Quels sont mes clients ?",
+        handler=list_clients,
+        business=BUSINESS_CODE,
+        parameters={"properties": {}, "required": []},
+        order=[],
+    ))
+    register(ToolSpec(
+        name="list_contracts",
+        label="Lister les contrats",
+        example="Quels sont mes contrats ? ou : contrats de Tagoun",
+        handler=list_contracts,
+        business=BUSINESS_CODE,
+        parameters={
+            "properties": {"client": {"type": "string", "description": "Nom du client (optionnel, sinon tous les contrats)"}},
+            "required": [],
+        },
+        order=[],
+    ))
+    register(ToolSpec(
+        name="get_payment_history",
+        label="Historique des paiements d'un contrat",
+        example="Historique des paiements du contrat MAT-100",
+        handler=get_payment_history,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": _CONTRACT_QUESTION},
+    ))
+    register(ToolSpec(
+        name="cancel_contract",
+        label="Annuler un contrat",
+        example="Annule le contrat MAT-100",
+        handler=cancel_contract,
+        business=BUSINESS_CODE,
+        parameters={"properties": {"contract": {"type": "string", "description": "Matricule du contrat ou nom du client"}}, "required": ["contract"]},
+        order=["contract"],
+        questions={"contract": _CONTRACT_QUESTION},
+        is_critical=True,
+        confirmation_note="Aucun remboursement n'est effectue automatiquement.",
+        is_read_only=False,
+    ))
+
+
+_register()
