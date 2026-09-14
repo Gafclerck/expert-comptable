@@ -52,6 +52,8 @@ class Settings(BaseSettings):
                 raise RuntimeError("Refus: SECRET_KEY par defaut interdite en production")
             if self.SUPER_USER_PASSWORD == "admin-changeme":
                 raise RuntimeError("Refus: SUPER_USER_PASSWORD par defaut interdite en production")
+            if self.DEBUG:
+                raise RuntimeError("Refus: DEBUG interdite en production (logs SQL exposes)")
         return self
 
     class Config:
